@@ -48,8 +48,8 @@ const sleep = (a = 1200, b = 2500) =>
     process.exit(1);
   }
 
-  // ── Phase 2: EC各サイトで価格取得 ──
-  console.log('【Phase 2】EC各サイト 価格調査\n');
+  // ── Phase 2: kakaku.com 商品ページから各EC価格を一括取得 ──
+  console.log('【Phase 2】kakaku.com 商品ページから EC価格を一括取得\n');
   const results = [];
   for (let i = 0; i < products.length; i++) {
     const p = products[i];

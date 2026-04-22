@@ -1,106 +1,116 @@
 /**
- * 各ECサイトの価格取得モジュール
+ * kakaku.com 商品ページから各ECの価格を一括取得
+ * 例: https://kakaku.com/item/K0001695178/
  */
 
-async function firstPrice(page, selectors) {
-  return page.evaluate((sels) => {
-    for (const sel of sels) {
-      for (const el of document.querySelectorAll(sel)) {
-        const t = el.textContent.trim().replace(/\s+/g, '');
-        if (/[¥￥,\d]{3,}/.test(t) && t.length < 30) return t;
-      }
+// 対象ショップ名（kakaku.com 上の表記に合わせる）
+const TARGET_SHOPS = [
+  { key: 'edion',     patterns: ['エディオン', 'EDION', 'edion'] },
+  { key: 'yodobashi', patterns: ['ヨドバシ', 'Yodobashi', 'yodobashi'] },
+  { key: 'amazon',    patterns: ['Amazon', 'アマゾン', 'amazon'] },
+  { key: 'bic',       patterns: ['ビックカメラ', 'BicCamera', 'ビック'] },
+];
+
+/**
+ * kakaku.com 商品ページの価格比較テーブルを解析
+ * → { edion, yodobashi, amazon, bic, allShops } を返す
+ */
+async function scrapePricesFromKakaku(page, itemUrl, sleep) {
+  try {
+    const res = await page.goto(itemUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    if (!res || res.status() !== 200) return null;
+    await sleep(1500, 2500);
+
+    // 「もっと見る」ボタンがあれば押して全ショップ展開
+    const moreBtn = page.locator('text=もっと見る, text=全店舗, [class*="more"]').first();
+    if (await moreBtn.isVisible().catch(() => false)) {
+      await moreBtn.click().catch(() => {});
+      await sleep(500, 1000);
     }
-    return null;
-  }, selectors);
-}
 
-async function getEdion(page, query, sleep) {
-  try {
-    await page.goto(
-      `https://www.edion.com/search/?q=${encodeURIComponent(query)}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await sleep(800, 1500);
-    return await firstPrice(page, [
-      '.selling_price', '.item_price .price', '.p-price__main',
-      '.price', '[class*="price"]',
-    ]);
-  } catch { return null; }
-}
+    const shopPrices = await page.evaluate(() => {
+      const results = [];
 
-async function getYodobashi(page, query, sleep) {
-  try {
-    await page.goto(
-      `https://www.yodobashi.com/?word=${encodeURIComponent(query)}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await sleep(800, 1500);
-    await page.waitForSelector('.priceSingle, .productPrice', { timeout: 5000 }).catch(() => {});
-    return await firstPrice(page, [
-      '.priceSingle', '.productPrice', '.price strong', '[class*="price"]',
-    ]);
-  } catch { return null; }
-}
-
-async function getAmazon(page, query, sleep) {
-  try {
-    await page.goto(
-      `https://www.amazon.co.jp/s?k=${encodeURIComponent(query)}&i=electronics`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await sleep(1000, 2000);
-    return await page.evaluate(() => {
-      const whole = document.querySelector(
-        '.s-result-item:not([data-asin=""]) .a-price-whole'
+      // --- パターン A: テーブル形式 ---
+      const rows = document.querySelectorAll(
+        '.priceTable tr, .shopList tr, [class*="shopList"] tr, ' +
+        '.ckitanker tr, table.tblPrice tr, .tbPrice tr'
       );
-      const frac = document.querySelector(
-        '.s-result-item:not([data-asin=""]) .a-price-fraction'
-      );
-      if (whole) {
-        return '¥' + whole.textContent.replace(/[^\d,]/g, '') + (frac?.textContent.trim() ?? '');
+      for (const row of rows) {
+        const cells = row.querySelectorAll('td, th');
+        if (cells.length < 2) continue;
+        const shopName = cells[0].textContent.trim().replace(/\s+/g, ' ');
+        const priceRaw = cells[1].textContent.trim().replace(/\s+/g, '');
+        if (shopName && /[¥￥\d,，]/.test(priceRaw)) {
+          results.push({ shop: shopName, price: priceRaw });
+        }
       }
-      const off = document.querySelector('.a-offscreen');
-      return off ? off.textContent.trim() : null;
-    });
-  } catch { return null; }
-}
+      if (results.length > 0) return results;
 
-async function getBic(page, query, sleep) {
-  try {
-    await page.goto(
-      `https://www.biccamera.com/bc/category/search.jsp?q=${encodeURIComponent(query)}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await sleep(800, 1500);
-    return await firstPrice(page, [
-      '.js-item-price', '.real_price', '.item-price',
-      '.price_box .price', '[class*="price"]',
-    ]);
-  } catch { return null; }
+      // --- パターン B: リスト形式 ---
+      const items = document.querySelectorAll(
+        '.shopItem, .priceItem, [class*="shopItem"], [class*="priceItem"], ' +
+        '.cShopItemList li, .shopListItem'
+      );
+      for (const el of items) {
+        const shopEl  = el.querySelector('[class*="shop"], [class*="Shop"], .nm, .name');
+        const priceEl = el.querySelector('[class*="price"], [class*="Price"], .price');
+        if (shopEl && priceEl) {
+          results.push({
+            shop:  shopEl.textContent.trim().replace(/\s+/g, ' '),
+            price: priceEl.textContent.trim().replace(/\s+/g, ''),
+          });
+        }
+      }
+      if (results.length > 0) return results;
+
+      // --- パターン C: 全テキストから価格行を抽出 ---
+      const allLinks = document.querySelectorAll('a[href*="kakaku.com/jump"], a[onclick*="jump"]');
+      for (const a of allLinks) {
+        const parent   = a.closest('li, tr, div[class]');
+        const priceEl  = parent?.querySelector('[class*="price"]');
+        if (priceEl) {
+          results.push({
+            shop:  a.textContent.trim().replace(/\s+/g, ' '),
+            price: priceEl.textContent.trim().replace(/\s+/g, ''),
+          });
+        }
+      }
+      return results;
+    });
+
+    // TARGET_SHOPS にマッチするものを抽出
+    const result = { edion: null, yodobashi: null, amazon: null, bic: null, allShops: shopPrices };
+    for (const { key, patterns } of TARGET_SHOPS) {
+      const found = shopPrices.find(s =>
+        patterns.some(p => s.shop.toLowerCase().includes(p.toLowerCase()))
+      );
+      if (found) result[key] = found.price;
+    }
+
+    return result;
+  } catch (e) {
+    console.log(`    エラー: ${e.message.split('\n')[0]}`);
+    return null;
+  }
 }
 
 /**
- * 1商品を全ECサイトで価格チェック
+ * 1商品の価格情報を取得
  */
 async function checkPrices(page, product, sleep) {
-  const query = product.name.slice(0, 60);
-  console.log(`    Edion...`);
-  const edion = await getEdion(page, query, sleep);
-  await sleep(1000, 1800);
+  console.log(`  価格ページ取得中...`);
+  if (!product.url) return { ...product, edion: null, yodobashi: null, amazon: null, bic: null };
 
-  console.log(`    Yodobashi...`);
-  const yodobashi = await getYodobashi(page, query, sleep);
-  await sleep(1000, 1800);
-
-  console.log(`    Amazon...`);
-  const amazon = await getAmazon(page, query, sleep);
-  await sleep(1000, 1800);
-
-  console.log(`    BicCamera...`);
-  const bic = await getBic(page, query, sleep);
-  await sleep(1000, 1800);
-
-  return { ...product, edion, yodobashi, amazon, bic };
+  const prices = await scrapePricesFromKakaku(page, product.url, sleep);
+  return {
+    ...product,
+    edion:     prices?.edion     ?? null,
+    yodobashi: prices?.yodobashi ?? null,
+    amazon:    prices?.amazon    ?? null,
+    bic:       prices?.bic       ?? null,
+    allShops:  prices?.allShops  ?? [],
+  };
 }
 
 module.exports = { checkPrices };
