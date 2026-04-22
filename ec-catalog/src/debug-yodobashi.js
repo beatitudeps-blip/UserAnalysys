@@ -19,7 +19,7 @@ const TEST_URL = 'https://www.yodobashi.com/category/6353/';
 
   // ── Step1: 家電カテゴリから実際の商品一覧（サブカテゴリ）URLを探す ──
   console.log(`\n[Step1] 家電カテゴリ内サブカテゴリ探索: ${TEST_URL}`);
-  await page.goto(TEST_URL, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(TEST_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(2000);
 
   const subCatInfo = await page.evaluate(() => {
@@ -46,7 +46,7 @@ const TEST_URL = 'https://www.yodobashi.com/category/6353/';
   // サブカテゴリが見つかればそこへ、なければ家電トップで続行
   const listUrl = subCatInfo.catLinks.find(l => l.href !== TEST_URL)?.href ?? TEST_URL;
   console.log(`\n[Step2] 商品一覧ページ調査: ${listUrl}`);
-  await page.goto(listUrl, { waitUntil: 'networkidle', timeout: 30000 });
+  await page.goto(listUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
   // itemCount が描画されるまで待機（最大10秒）
   await page.waitForSelector('.itemCount', { timeout: 10000 }).catch(() => {});
