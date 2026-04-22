@@ -1,91 +1,66 @@
 /**
  * ヨドバシカメラ カテゴリ別ブランド数・商品数スクレイパー
- * https://www.yodobashi.com/
+ *
+ * 確認済み構造:
+ *   カテゴリURL : https://www.yodobashi.com/category/{id}/
+ *   商品一覧    : {catUrl}?word= → [class*="productList"] li または .srcResultItem
+ *   ブランド一覧: {catUrl}maker/ → a[href*="/m数字"]
  */
 
 const SITE = 'yodobashi';
-const BASE_URL = 'https://www.yodobashi.com/';
 
-/**
- * トップページからカテゴリ一覧を取得
- */
-async function fetchCategories(page) {
-  await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(2000);
+async function fetchCategories(page, sleep) {
+  await page.goto('https://www.yodobashi.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await sleep(1500, 2000);
 
   return page.evaluate(() => {
-    const cats = [];
-    // グローバルナビのカテゴリリンクを収集
-    const selectors = [
-      '.gnav_item a',
-      '.globalNav a',
-      'nav a[href*="/category/"]',
-      '.categoryList a',
-    ];
-    for (const sel of selectors) {
-      const links = document.querySelectorAll(sel);
-      if (links.length === 0) continue;
-      for (const a of links) {
-        const name = a.textContent.trim().replace(/\s+/g, ' ');
-        const href = a.href;
-        if (!name || !href.includes('/category/')) continue;
-        cats.push({ name, url: href });
-      }
-      if (cats.length > 0) break;
-    }
-    // 重複除去
-    const seen = new Set();
-    return cats.filter(c => {
-      if (seen.has(c.url)) return false;
-      seen.add(c.url);
-      return true;
-    });
+    const cats = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+      .map(a => ({
+        name: a.textContent.trim().replace(/\s+/g, ' '),
+        url:  a.href.split('?')[0].replace(/\/?$/, '/'),
+      }))
+      .filter(c => c.name.length > 0)
+      .filter((c, i, arr) => arr.findIndex(b => b.url === c.url) === i);
+    return cats;
   });
 }
 
-/**
- * カテゴリページからブランド数・商品数を取得
- */
 async function fetchCategoryStats(page, category, sleep) {
   try {
-    const res = await page.goto(category.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    // ── 商品数: ?word= 付きURLで全商品一覧 ──
+    const listUrl = category.url.replace(/\/?$/, '/') + '?word=';
+    const res = await page.goto(listUrl, { waitUntil: 'load', timeout: 30000 });
     if (!res || res.status() !== 200) return null;
-    await sleep(1000, 1800);
+    await sleep(1500, 2000);
 
-    return page.evaluate(() => {
-      // 商品数: "XX件" や "全XX件" 表示
-      const countPatterns = [
-        '[class*="itemCount"]',
-        '[class*="searchResult"] [class*="count"]',
-        '[class*="total"]',
-        '.resultNum',
-        '.paginationArea',
-      ];
-      let productCount = null;
-      for (const sel of countPatterns) {
-        const el = document.querySelector(sel);
-        if (!el) continue;
-        const m = el.textContent.match(/[\d,]+/);
-        if (m) { productCount = parseInt(m[0].replace(',', ''), 10); break; }
-      }
+    // スクロールで遅延描画を促す
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await sleep(800, 1200);
 
-      // ブランド数: 左サイドのブランド絞り込みリストを数える
-      const brandPatterns = [
-        '[class*="maker"] li',
-        '[class*="brand"] li',
-        '[class*="Brand"] li',
-        '[class*="Maker"] li',
-        'ul[id*="maker"] li',
-        'ul[id*="brand"] li',
-      ];
-      let brandCount = null;
-      for (const sel of brandPatterns) {
-        const items = document.querySelectorAll(sel);
-        if (items.length > 0) { brandCount = items.length; break; }
-      }
-
-      return { productCount, brandCount };
+    const productCount = await page.evaluate(() => {
+      // 確認済み: .srcResultItem または [class*="productList"] li
+      const items = document.querySelectorAll('.srcResultItem');
+      if (items.length > 0) return items.length;
+      const listItems = document.querySelectorAll('[class*="productList"] li');
+      return listItems.length || null;
     });
+
+    // ── ブランド数: /maker/ ページ ──
+    const makerUrl = category.url.replace(/\/?$/, '/') + 'maker/';
+    const makerRes = await page.goto(makerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (!makerRes || makerRes.status() !== 200) {
+      return { productCount, brandCount: null };
+    }
+    await sleep(1000, 1500);
+
+    const brandCount = await page.evaluate(() => {
+      // 確認済み: /m数字 パターンのリンクがブランドリンク
+      const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+        .filter(a => /\/m\d/.test(a.href));
+      return links.length || null;
+    });
+
+    return { productCount, brandCount };
   } catch (e) {
     return null;
   }
@@ -93,7 +68,7 @@ async function fetchCategoryStats(page, category, sleep) {
 
 async function scrape(page, sleep) {
   console.log(`\n[ヨドバシ] カテゴリ一覧を取得中...`);
-  const categories = await fetchCategories(page);
+  const categories = await fetchCategories(page, sleep);
   console.log(`  → ${categories.length} カテゴリ検出`);
 
   const results = [];
