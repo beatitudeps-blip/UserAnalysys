@@ -1,15 +1,15 @@
 /**
- * エディオン サイト構造調査 v3
+ * エディオン サイト構造調査 v4
  * npm run debug:edion
  *
- * 前回判明: カテゴリURL = category001.html?c_cd=001XXX
- * 今回: category001ページの商品数・ブランド構造を調査
+ * 目的: item_list.html（葉カテゴリ）の商品数・ブランド確認
  */
 const { chromium } = require('playwright');
 
-// 確認済みカテゴリURL
-const CAT_URL  = 'https://www.edion.com/category001.html?c_cd=001001'; // 冷蔵庫・洗濯機
-const CAT_LIST = 'https://www.edion.com/category_list.html';           // カテゴリ一覧
+const URLS = {
+  冷蔵庫一覧: 'https://www.edion.com/item_list.html?c_cd=001001001',
+  洗濯機一覧: 'https://www.edion.com/item_list.html?c_cd=001001003',
+};
 
 (async () => {
   const browser = await chromium.launch({
@@ -19,103 +19,81 @@ const CAT_LIST = 'https://www.edion.com/category_list.html';           // カテ
   });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    locale: 'ja-JP', timezoneId: 'Asia/Tokyo',
-    ignoreHTTPSErrors: true, viewport: { width: 1280, height: 900 },
+    locale: 'ja-JP', timezoneId: 'Asia/Tokyo', ignoreHTTPSErrors: true, viewport: { width: 1280, height: 900 },
   });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    window.chrome = { runtime: {} };
-  });
+  await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); window.chrome = { runtime: {} }; });
   const page = await context.newPage();
 
-  // ── Step1: カテゴリ一覧ページ ──
-  console.log(`\n[Step1] カテゴリ一覧: ${CAT_LIST}`);
-  await page.goto(CAT_LIST, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  for (const [label, url] of Object.entries(URLS)) {
+    console.log(`\n====== ${label}: ${url} ======`);
+    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    await page.waitForTimeout(4000);
+    await page.evaluate(() => window.scrollTo(0, 600));
+    await page.waitForTimeout(1500);
 
-  const listInfo = await page.evaluate(() => {
-    const title = document.title;
-    const links = Array.from(document.querySelectorAll('a[href*="c_cd="]'))
-      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 50), href: a.href }))
-      .filter((a, i, arr) => arr.findIndex(b => b.href === a.href) === i)
-      .slice(0, 30);
-    return { title, links, bodyLen: document.body.innerHTML.length };
-  });
-  console.log(`  title: ${listInfo.title}  body長: ${listInfo.bodyLen}`);
-  console.log('  c_cd リンク:');
-  listInfo.links.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
+    const info = await page.evaluate(() => {
+      const url   = location.href;
+      const title = document.title;
 
-  // ── Step2: 冷蔵庫・洗濯機カテゴリページ ──
-  console.log(`\n[Step2] カテゴリページ: ${CAT_URL}`);
-  await page.goto(CAT_URL, { waitUntil: 'load', timeout: 30000 });
-  await page.waitForTimeout(4000);
-  await page.evaluate(() => window.scrollTo(0, 600));
-  await page.waitForTimeout(1500);
+      // 1. 件数含む要素（「件」「点」「商品」）
+      const countEls = Array.from(document.querySelectorAll('*'))
+        .filter(el => el.children.length === 0 && /[\d,]+(件|点|商品|結果)/.test(el.textContent))
+        .slice(0, 10)
+        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim() }));
 
-  const catInfo = await page.evaluate(() => {
-    const url   = location.href;
-    const title = document.title;
-    const bodyLen = document.body.innerHTML.length;
+      // 2. 価格持つliをカウント（商品タイル）
+      const allLi = Array.from(document.querySelectorAll('li'));
+      const liWithPrice = allLi.filter(li => /[\d,]+円/.test(li.textContent));
 
-    // 件数含む要素
-    const countEls = Array.from(document.querySelectorAll('*'))
-      .filter(el => el.children.length === 0 && /[\d,]+(件|点)/.test(el.textContent))
-      .slice(0, 10)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim() }));
+      // 3. 商品タイルクラス特定
+      const priceTags = Array.from(document.querySelectorAll('*'))
+        .filter(el => el.children.length === 0 && /[\d,]+円/.test(el.textContent));
+      const tileClasses = [...new Set(
+        priceTags.map(el => { let p = el.parentElement; for (let i = 0; i < 6; i++) { if (p?.tagName === 'LI') return p.className.slice(0, 60); p = p?.parentElement; } return null; }).filter(Boolean)
+      )];
 
-    // 商品タイルセレクタ
-    const tileTests = [
-      '[class*="itemList"] li', '[class*="productList"] li',
-      '[class*="list"] li', '[class*="item"] li',
-      '.productItem', '.searchItem', '.resultItem',
-    ].map(sel => ({ sel, count: document.querySelectorAll(sel).length }))
-     .filter(t => t.count > 0);
+      // 4. ブランド/メーカー要素（より広く）
+      const brandEls = Array.from(document.querySelectorAll('[class*="maker"], [class*="brand"], [class*="Brand"], [class*="mfr"], [class*="Maker"], [id*="maker"], [id*="brand"]'))
+        .filter(el => el.querySelectorAll('a, li, label, input').length > 0)
+        .slice(0, 5)
+        .map(el => ({
+          tag: el.tagName, id: (el.id || '').slice(0, 40), cls: el.className.slice(0, 80),
+          childCount: el.querySelectorAll('a, li, label').length,
+          sample: Array.from(el.querySelectorAll('a, li, label')).slice(0, 5).map(i => i.textContent.trim().slice(0, 20)).join(' | '),
+        }));
 
-    // ブランド/メーカー
-    const brandEls = Array.from(document.querySelectorAll(
-      '[class*="maker"], [class*="brand"], [class*="Brand"], [class*="Maker"], [class*="mfr"]'
-    )).filter(el => el.querySelectorAll('a, li').length > 0)
-      .slice(0, 5)
-      .map(el => ({
-        tag: el.tagName, cls: el.className.slice(0, 80),
-        count: el.querySelectorAll('a, li').length,
-        sample: Array.from(el.querySelectorAll('a, li')).slice(0, 5).map(i => i.textContent.trim().slice(0, 20)).join(' | '),
-      }));
+      // 5. 絞り込みエリア
+      const filterEls = Array.from(document.querySelectorAll('[class*="filter"], [class*="Filter"], [class*="narrow"], [class*="refine"], [class*="search"] ul'))
+        .filter(el => el.querySelectorAll('a, li').length > 2)
+        .slice(0, 3)
+        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), count: el.querySelectorAll('a, li').length, sample: el.textContent.trim().slice(0, 100).replace(/\s+/g, ' ') }));
 
-    // サブカテゴリ（c_cd 付きリンク）
-    const subCats = Array.from(document.querySelectorAll('a[href*="c_cd="]'))
-      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 40), href: a.href }))
-      .filter((a, i, arr) => arr.findIndex(b => b.href === a.href) === i)
-      .slice(0, 20);
+      // 6. ページネーション
+      const pagerEls = Array.from(document.querySelectorAll('[class*="page"], [class*="pager"], [class*="navi"]'))
+        .filter(el => /\d/.test(el.textContent)).slice(0, 3)
+        .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 100) }));
 
-    // item_list.html リンク
-    const itemListLinks = Array.from(document.querySelectorAll('a[href*="item_list"]'))
-      .map(a => ({ text: a.textContent.trim().slice(0, 40), href: a.href }))
-      .slice(0, 10);
+      // 7. 全クラス名ヒント
+      const allClasses = [...new Set(
+        Array.from(document.querySelectorAll('*')).map(el => el.className)
+          .filter(c => typeof c === 'string').join(' ').split(/\s+/)
+      )].filter(c => /maker|brand|count|total|result|filter|item|product|list|search/i.test(c)).slice(0, 40);
 
-    // クラス名ヒント
-    const allClasses = [...new Set(
-      Array.from(document.querySelectorAll('*')).map(el => el.className)
-        .filter(c => typeof c === 'string').join(' ').split(/\s+/)
-    )].filter(c => /maker|brand|count|total|result|filter|item|product|list/i.test(c)).slice(0, 40);
+      return { url, title, countEls, liWithPriceCount: liWithPrice.length, tileClasses, brandEls, filterEls, pagerEls, allClasses };
+    });
 
-    return { url, title, bodyLen, countEls, tileTests, brandEls, subCats, itemListLinks, allClasses };
-  });
-
-  console.log(`  title: ${catInfo.title}  body長: ${catInfo.bodyLen}`);
-  console.log('  件数含む要素:');
-  catInfo.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> → "${e.text}"`));
-  console.log('  タイルセレクタ:');
-  catInfo.tileTests.forEach(t => console.log(`    ${t.sel}: ${t.count}`));
-  console.log('  ブランド要素:');
-  catInfo.brandEls.forEach(e =>
-    console.log(`    <${e.tag} class="${e.cls}"> count=${e.count}  sample: ${e.sample}`)
-  );
-  console.log('  サブカテゴリ (c_cd):');
-  catInfo.subCats.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
-  console.log('  item_list リンク:');
-  catInfo.itemListLinks.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
-  console.log('  クラス名ヒント:', catInfo.allClasses.join(', '));
+    console.log(`  title: ${info.title}`);
+    console.log('  件数含む要素:');
+    info.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> → "${e.text}"`));
+    console.log(`  価格ありli数: ${info.liWithPriceCount}  タイルLIクラス: ${info.tileClasses.join(', ') || '(なし)'}`);
+    console.log('  ブランド/メーカー要素:');
+    info.brandEls.forEach(e => console.log(`    <${e.tag} id="${e.id}" class="${e.cls}"> count=${e.childCount}  sample: ${e.sample}`));
+    console.log('  フィルタ要素:');
+    info.filterEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> count=${e.count}  "${e.sample}"`));
+    console.log('  ページネーション:');
+    info.pagerEls.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
+    console.log('  クラス名ヒント:', info.allClasses.join(', '));
+  }
 
   await browser.close();
 })();
