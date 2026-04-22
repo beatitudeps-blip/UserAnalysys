@@ -3,30 +3,41 @@
  * カテゴリページから ranking_{code} URLを動的に取得してスクレイピング
  */
 
-const TOP_N = 3;
+const TOP_N = 5;
 
 // カテゴリ名 + ベースURL（/kaden/{cat}/ から ranking リンクを自動検出）
 const CATEGORIES = [
-  // 家電
-  { name: 'テレビ',           base: 'https://kakaku.com/kaden/lcd-tv/' },
-  { name: '冷蔵庫',           base: 'https://kakaku.com/kaden/freezer/' },
-  { name: '洗濯機',           base: 'https://kakaku.com/kaden/washing-machine/' },
-  { name: 'エアコン',         base: 'https://kakaku.com/kaden/aircon/' },
-  { name: '電子レンジ',       base: 'https://kakaku.com/kaden/microwave-oven/' },
-  { name: '掃除機',           base: 'https://kakaku.com/kaden/vacuum-cleaner/' },
-  { name: '炊飯器',           base: 'https://kakaku.com/kaden/rice-cooker/' },
-  { name: 'ドライヤー',       base: 'https://kakaku.com/kaden/hair-dryer/' },
-  { name: '空気清浄機',       base: 'https://kakaku.com/kaden/air-cleaner/' },
-  { name: '加湿器',           base: 'https://kakaku.com/kaden/humidifier/' },
-  { name: '食器洗い機',       base: 'https://kakaku.com/kaden/dish-washer/' },
+  // 家電・白物
+  { name: 'テレビ',               base: 'https://kakaku.com/kaden/lcd-tv/' },
+  { name: '冷蔵庫',               base: 'https://kakaku.com/kaden/freezer/' },
+  { name: '洗濯機',               base: 'https://kakaku.com/kaden/washing-machine/' },
+  { name: 'エアコン',             base: 'https://kakaku.com/kaden/aircon/' },
+  { name: '電子レンジ',           base: 'https://kakaku.com/kaden/microwave-oven/' },
+  { name: '掃除機',               base: 'https://kakaku.com/kaden/vacuum-cleaner/' },
+  { name: 'ロボット掃除機',       base: 'https://kakaku.com/kaden/robot-cleaner/' },
+  { name: '炊飯器',               base: 'https://kakaku.com/kaden/rice-cooker/' },
+  { name: 'ドライヤー',           base: 'https://kakaku.com/kaden/hair-dryer/' },
+  { name: '空気清浄機',           base: 'https://kakaku.com/kaden/air-cleaner/' },
+  { name: '加湿器',               base: 'https://kakaku.com/kaden/humidifier/' },
+  { name: '食器洗い機',           base: 'https://kakaku.com/kaden/dish-washer/' },
+  { name: '電気ケトル',           base: 'https://kakaku.com/kaden/electric-kettle/' },
+  { name: 'オーブントースター',   base: 'https://kakaku.com/kaden/toaster-oven/' },
+  // AV・オーディオ
   { name: 'イヤホン・ヘッドホン', base: 'https://kakaku.com/kaden/headphones/' },
-  { name: 'スピーカー',       base: 'https://kakaku.com/kaden/speaker/' },
-  { name: 'シェーバー',       base: 'https://kakaku.com/kaden/shaver/' },
-  { name: 'モバイルバッテリー', base: 'https://kakaku.com/kaden/mobile-battery/' },
+  { name: 'スピーカー',           base: 'https://kakaku.com/kaden/speaker/' },
+  // 理美容
+  { name: 'シェーバー',           base: 'https://kakaku.com/kaden/shaver/' },
+  { name: 'モバイルバッテリー',   base: 'https://kakaku.com/kaden/mobile-battery/' },
   // PC・デジタル
-  { name: 'ノートPC',         base: 'https://kakaku.com/pc/note-pc/' },
-  { name: 'タブレット',       base: 'https://kakaku.com/pc/pda/' },
-  { name: 'ゲーム機',         base: 'https://kakaku.com/game/game-console/' },
+  { name: 'ノートPC',             base: 'https://kakaku.com/pc/note-pc/' },
+  { name: 'タブレット',           base: 'https://kakaku.com/pc/pda/' },
+  { name: 'プリンター',           base: 'https://kakaku.com/pc/printer/' },
+  // スマート・カメラ
+  { name: 'スマートフォン',       base: 'https://kakaku.com/keitai/smartphone/' },
+  { name: 'スマートウォッチ',     base: 'https://kakaku.com/keitai/smart-watch/' },
+  { name: 'デジタルカメラ',       base: 'https://kakaku.com/camera/digital-camera/' },
+  // ゲーム
+  { name: 'ゲーム機',             base: 'https://kakaku.com/game/game-console/' },
 ];
 
 /**
@@ -34,11 +45,18 @@ const CATEGORIES = [
  */
 async function findRankingUrl(page, baseUrl) {
   await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
-  return page.evaluate(() => {
-    // /ranking_XXXX/ 形式のリンクを探す
-    const links = Array.from(document.querySelectorAll('a[href*="/ranking_"]'));
-    return links.length > 0 ? links[0].href : null;
-  });
+  return page.evaluate((base) => {
+    // 現在のURLが既にランキングページの場合
+    if (/\/ranking[_/]/.test(location.href)) return location.href;
+
+    // /ranking_XXXX/ 形式を優先、なければ /ranking/ 形式
+    const links = Array.from(document.querySelectorAll('a[href*="/ranking_"], a[href*="/ranking/"]'));
+    if (links.length > 0) return links[0].href;
+
+    // hot（人気順）タブリンクを試みる
+    const hotLink = document.querySelector('a[href*="/hot/"], a[href*="sort=hot"]');
+    return hotLink ? hotLink.href : null;
+  }, baseUrl);
 }
 
 /**
