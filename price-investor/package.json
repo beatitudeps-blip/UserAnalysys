@@ -7,7 +7,8 @@
     "start": "node src/price-research.js",
     "test:browser": "node src/browser-test.js",
     "setup": "npx playwright install chromium",
-    "debug:kakaku": "node src/debug-kakaku.js"
+    "debug:kakaku": "node src/debug-kakaku.js",
+    "debug:item": "node src/debug-item.js"
   },
   "dependencies": {
     "playwright": "^1.44.0"

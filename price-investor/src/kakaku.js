@@ -67,7 +67,7 @@ async function scrapeRankingPage(page, rankingUrl) {
         const priceEl = el.querySelector('.priceTxt, [class*="price"]');
         if (nameEl && nameEl.textContent.trim()) {
           results.push({
-            name:  nameEl.textContent.trim().replace(/\s+/g, ' '),
+            name:  nameEl.textContent.trim().replace(/\s+/g, ' ').replace(/^\d+位\s*/, '').replace(/\s*\d+位$/, ''),
             price: priceEl ? priceEl.textContent.trim().replace(/\s+/g, '') : '-',
             url:   nameEl.href,
           });
@@ -79,7 +79,7 @@ async function scrapeRankingPage(page, rankingUrl) {
     // 戦略B: /item/ リンクをランキング順に収集
     const seen = new Set();
     for (const a of document.querySelectorAll('a[href*="/item/"]')) {
-      const name = a.textContent.trim().replace(/\s+/g, ' ');
+      const name = a.textContent.trim().replace(/\s+/g, ' ').replace(/^\d+位\s*/, '').replace(/\s*\d+位$/, '');
       if (!name || seen.has(a.href)) continue;
       seen.add(a.href);
       const parent   = a.closest('li, article, tr, div[class]');
