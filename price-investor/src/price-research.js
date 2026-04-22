@@ -1,106 +1,25 @@
-const { chromium } = require('playwright');
-const fs = require('fs');
-const path = require('path');
+/**
+ * 価格コム 家電・電化製品 ランキング × EC価格比較
+ *
+ * 実行:
+ *   npm start
+ *
+ * 出力:
+ *   output/price-report-YYYY-MM-DD.md
+ *   output/price-report-YYYY-MM-DD.csv
+ */
 
-const OUTPUT_DIR = path.join(__dirname, '..', 'output');
-if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR);
+const { chromium }          = require('playwright');
+const { scrapeAllCategories } = require('./kakaku');
+const { checkPrices }       = require('./ec-prices');
+const { saveReports }       = require('./report');
 
-// ──────────────────────────────────────────────
-// 調査対象商品リスト（kakaku.com ランキング上位 代表モデル）
-// ──────────────────────────────────────────────
-const PRODUCTS = [
-  { category: 'テレビ',     name: 'Sony BRAVIA XRJ-55X90L' },
-  { category: 'テレビ',     name: 'SHARP AQUOS 4T-C50FN1' },
-  { category: '冷蔵庫',     name: 'Panasonic NR-F536HPX' },
-  { category: '冷蔵庫',     name: 'SHARP SJ-SF50L' },
-  { category: '洗濯機',     name: 'Panasonic NA-FA11K3' },
-  { category: '洗濯機',     name: 'SHARP ES-GV12H' },
-  { category: 'エアコン',   name: 'Panasonic CS-X402D2' },
-  { category: 'エアコン',   name: 'Daikin AN40YRP' },
-  { category: '電子レンジ', name: 'Panasonic NE-BS807' },
-  { category: '電子レンジ', name: 'SHARP RE-SS10A' },
-  { category: '掃除機',     name: 'Dyson V15 Detect Absolute' },
-  { category: '掃除機',     name: 'iRobot Roomba j9+' },
-  { category: '炊飯器',     name: 'Panasonic SR-VSX181' },
-  { category: '炊飯器',     name: 'SHARP KS-CF10B' },
-  { category: 'ドライヤー', name: 'Panasonic EH-NA0J' },
-  { category: 'ドライヤー', name: 'Dyson Supersonic HD08' },
-];
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const rand  = (a = 1200, b = 2500) => sleep(a + Math.floor(Math.random() * (b - a)));
-
-async function firstPrice(page, selectors) {
-  return page.evaluate((sels) => {
-    for (const sel of sels) {
-      for (const el of document.querySelectorAll(sel)) {
-        const t = el.textContent.trim().replace(/\s+/g, '');
-        if (/[¥￥,\d]/.test(t) && t.length < 30) return t;
-      }
-    }
-    return '取得不可';
-  }, selectors);
-}
-
-async function getEdion(page, query) {
-  try {
-    await page.goto(
-      `https://www.edion.com/search/?q=${encodeURIComponent(query)}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await rand(800, 1500);
-    return await firstPrice(page, [
-      '.selling_price', '.item_price .price', '.p-price__main', '[class*="price"]',
-    ]);
-  } catch { return 'エラー'; }
-}
-
-async function getYodobashi(page, query) {
-  try {
-    await page.goto(
-      `https://www.yodobashi.com/?word=${encodeURIComponent(query)}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await rand(800, 1500);
-    await page.waitForSelector('.priceSingle, .productPrice', { timeout: 5000 }).catch(() => {});
-    return await firstPrice(page, [
-      '.priceSingle', '.productPrice', '.price strong', '[class*="price"]',
-    ]);
-  } catch { return 'エラー'; }
-}
-
-async function getAmazon(page, query) {
-  try {
-    await page.goto(
-      `https://www.amazon.co.jp/s?k=${encodeURIComponent(query)}&i=electronics`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await rand(1000, 2000);
-    return await page.evaluate(() => {
-      const whole = document.querySelector('.s-result-item:not([data-asin=""]) .a-price-whole');
-      const frac  = document.querySelector('.s-result-item:not([data-asin=""]) .a-price-fraction');
-      if (whole) return '¥' + whole.textContent.trim().replace(/[^\d,]/g, '') + (frac?.textContent.trim() ?? '');
-      const off = document.querySelector('.a-offscreen');
-      return off ? off.textContent.trim() : '取得不可';
-    });
-  } catch { return 'エラー'; }
-}
-
-async function getBic(page, query) {
-  try {
-    await page.goto(
-      `https://www.biccamera.com/bc/category/search.jsp?q=${encodeURIComponent(query)}`,
-      { waitUntil: 'domcontentloaded', timeout: 20000 }
-    );
-    await rand(800, 1500);
-    return await firstPrice(page, [
-      '.js-item-price', '.real_price', '.item-price', '.price_box .price', '[class*="price"]',
-    ]);
-  } catch { return 'エラー'; }
-}
+const sleep = (a = 1200, b = 2500) =>
+  new Promise(r => setTimeout(r, a + Math.floor(Math.random() * (b - a))));
 
 (async () => {
-  console.log('ブラウザを起動中...\n');
+  const date = new Date().toISOString().slice(0, 10);
+  console.log(`=== 価格比較調査開始 ${date} ===\n`);
 
   const browser = await chromium.launch({
     headless: false,
@@ -117,53 +36,34 @@ async function getBic(page, query) {
   });
 
   const page = await context.newPage();
+
+  // ── Phase 1: kakaku.com ランキング取得 ──
+  console.log('【Phase 1】kakaku.com ランキング取得\n');
+  const products = await scrapeAllCategories(page, sleep);
+  console.log(`\n→ 合計 ${products.length} 商品を取得\n`);
+
+  if (products.length === 0) {
+    console.error('商品が取得できませんでした。ネットワーク接続を確認してください。');
+    await browser.close();
+    process.exit(1);
+  }
+
+  // ── Phase 2: EC各サイトで価格取得 ──
+  console.log('【Phase 2】EC各サイト 価格調査\n');
   const results = [];
-
-  for (const product of PRODUCTS) {
-    console.log(`\n[${product.category}] ${product.name}`);
-    const row = { ...product, edion: null, yodobashi: null, amazon: null, bic: null };
-
-    console.log('  → Edion...');
-    row.edion = await getEdion(page, product.name);
-    console.log(`     ${row.edion}`);
-    await rand();
-
-    console.log('  → Yodobashi...');
-    row.yodobashi = await getYodobashi(page, product.name);
-    console.log(`     ${row.yodobashi}`);
-    await rand();
-
-    console.log('  → Amazon...');
-    row.amazon = await getAmazon(page, product.name);
-    console.log(`     ${row.amazon}`);
-    await rand();
-
-    console.log('  → Bic Camera...');
-    row.bic = await getBic(page, product.name);
-    console.log(`     ${row.bic}`);
-    await rand();
-
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    console.log(`[${i + 1}/${products.length}] [${p.category}] ${p.name}`);
+    const row = await checkPrices(page, p, sleep);
     results.push(row);
+    await sleep(1500, 2500);
   }
 
   await browser.close();
 
-  const date = new Date().toISOString().slice(0, 10);
-  const categories = [...new Set(results.map(r => r.category))];
+  // ── Phase 3: レポート出力 ──
+  console.log('\n【Phase 3】レポート生成');
+  saveReports(results, date);
 
-  let md = `# 家電カテゴリ 人気商品 価格比較\n\n調査日: ${date}\n\n`;
-  for (const cat of categories) {
-    md += `## ${cat}\n\n`;
-    md += `| 商品名 | エディオン | ヨドバシ | Amazon | ビックカメラ |\n`;
-    md += `|--------|----------|---------|--------|------------|\n`;
-    for (const r of results.filter(r => r.category === cat)) {
-      md += `| ${r.name} | ${r.edion ?? '-'} | ${r.yodobashi ?? '-'} | ${r.amazon ?? '-'} | ${r.bic ?? '-'} |\n`;
-    }
-    md += '\n';
-  }
-
-  const outPath = path.join(OUTPUT_DIR, `price-list-${date}.md`);
-  fs.writeFileSync(outPath, md, 'utf-8');
-  console.log(`\n✓ 結果を保存しました: ${outPath}`);
-  console.log('\n' + md);
+  console.log('\n=== 完了 ===');
 })();
