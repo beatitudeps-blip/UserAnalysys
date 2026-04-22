@@ -12,27 +12,26 @@
 
 const { chromium }    = require('playwright');
 const { scrape: scrapeYodobashi } = require('./yodobashi');
-const { scrape: scrapeBic }      = require('./biccamera');
 const { scrape: scrapeEdion }    = require('./edion');
+const { scrape: scrapeJoshin }   = require('./joshin');
 const { saveReports }            = require('./report');
 
 const sleep = (a = 1200, b = 2500) =>
   new Promise(r => setTimeout(r, a + Math.floor(Math.random() * (b - a))));
 
-// コマンドライン引数でサイトを絞れる: node src/main.js yodobashi bic
+// コマンドライン引数でサイトを絞れる: node src/main.js yodobashi edion joshin
 const targetArg = process.argv.slice(2).map(s => s.toLowerCase());
 const ALL_SCRAPERS = [
-  { key: 'yodobashi', label: 'ヨドバシカメラ', fn: scrapeYodobashi },
-  { key: 'bic',       label: 'ビックカメラ',   fn: scrapeBic },
-  { key: 'biccamera', label: 'ビックカメラ',   fn: scrapeBic },
-  { key: 'edion',     label: 'エディオン',     fn: scrapeEdion },
+  { key: 'yodobashi', label: 'ヨドバシカメラ',  fn: scrapeYodobashi },
+  { key: 'edion',     label: 'エディオン',      fn: scrapeEdion },
+  { key: 'joshin',    label: '上新電機',        fn: scrapeJoshin },
 ];
 
 function resolveScrapers() {
   if (targetArg.length === 0) return [
     { label: 'ヨドバシカメラ', fn: scrapeYodobashi },
-    { label: 'ビックカメラ',   fn: scrapeBic },
     { label: 'エディオン',     fn: scrapeEdion },
+    { label: '上新電機',       fn: scrapeJoshin },
   ];
   const chosen = [];
   for (const arg of targetArg) {
