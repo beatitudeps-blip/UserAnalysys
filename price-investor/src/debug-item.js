@@ -23,64 +23,47 @@ if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
   await page.waitForTimeout(3000);
   await page.screenshot({ path: path.join(SHOT_DIR, 'item_page.png'), fullPage: true });
 
-  // ── 価格テーブル周辺のHTML構造を調査 ──
+  // ── p-priceList_ クラスの構造を詳細調査 ──
   const info = await page.evaluate(() => {
-    const result = {};
+    // priceList 配下のアイテムを取得
+    const listItems = document.querySelectorAll('[class*="p-priceList_item"], [class*="p-priceList"] li');
+    console.log('listItems count:', listItems.length);
 
-    // 試すセレクタ一覧
-    const selectors = [
-      '.priceTable', '#Prices', '.shopInfo', '.shopItemList',
-      '.ckitanker', '.cShopPrice', '.tabContents',
-      'table[class*="shop"]', 'table[class*="price"]',
-      '[class*="shopList"]', '[class*="ShopList"]',
-      '[class*="priceList"]', '[class*="PriceList"]',
-      '[id*="price"]', '[id*="shop"]',
-    ];
-
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        result[sel] = el.innerHTML.slice(0, 300).replace(/\s+/g, ' ');
-      }
+    const rows = [];
+    for (const li of Array.from(listItems).slice(0, 5)) {
+      rows.push({
+        outerHTML: li.outerHTML.replace(/\s+/g, ' ').slice(0, 500),
+      });
     }
 
-    // すべてのテーブルのclass/id
-    result['_tables'] = Array.from(document.querySelectorAll('table'))
-      .map(t => ({ class: t.className, id: t.id, rows: t.rows.length }));
+    // p-priceList_ で始まるクラスを全収集
+    const priceClasses = new Set();
+    document.querySelectorAll('[class*="p-priceList_"]').forEach(el => {
+      el.className.split(' ').filter(c => c.startsWith('p-priceList_')).forEach(c => priceClasses.add(c));
+    });
 
-    // 「ヨドバシ」「エディオン」「Amazon」「ビック」を含む要素
-    const keywords = ['ヨドバシ', 'エディオン', 'Amazon', 'ビックカメラ'];
-    result['_shopElements'] = {};
-    for (const kw of keywords) {
-      const found = Array.from(document.querySelectorAll('*'))
-        .find(el => el.children.length === 0 && el.textContent.trim().includes(kw));
-      if (found) {
-        result['_shopElements'][kw] = {
-          tag:       found.tagName,
-          class:     found.className,
-          parent:    found.parentElement?.className,
-          grandpa:   found.parentElement?.parentElement?.className,
-        };
-      }
-    }
+    // 価格らしい要素 (¥ を含む) の情報
+    const priceEls = Array.from(document.querySelectorAll('[class*="p-priceList_"]'))
+      .filter(el => /[¥￥]/.test(el.textContent))
+      .slice(0, 5)
+      .map(el => ({ class: el.className, text: el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50) }));
 
-    return result;
+    return {
+      listItemCount: listItems.length,
+      sampleRows: rows,
+      priceListClasses: [...priceClasses].sort(),
+      priceElements: priceEls,
+    };
   });
 
-  console.log('\n=== セレクタ調査結果 ===');
-  for (const [sel, val] of Object.entries(info)) {
-    if (sel === '_tables') {
-      console.log('\n--- テーブル一覧 ---');
-      val.forEach(t => console.log(`  class="${t.class}" id="${t.id}" rows=${t.rows}`));
-    } else if (sel === '_shopElements') {
-      console.log('\n--- ショップ要素 ---');
-      for (const [kw, el] of Object.entries(val)) {
-        console.log(`  ${kw}: <${el.tag} class="${el.class}"> 親="${el.parent}" 祖父="${el.grandpa}"`);
-      }
-    } else {
-      console.log(`\n[${sel}]\n  ${val}`);
-    }
-  }
+  console.log('\n=== p-priceList_ 構造調査 ===');
+  console.log(`リストアイテム数: ${info.listItemCount}`);
+  console.log('\n--- p-priceList_ クラス一覧 ---');
+  info.priceListClasses.forEach(c => console.log('  ' + c));
+  console.log('\n--- 価格要素 (¥含む) ---');
+  info.priceElements.forEach(e => console.log(`  class="${e.class}"\n    text="${e.text}"`));
+  console.log('\n--- サンプルHTML (先頭5件) ---');
+  info.sampleRows.forEach((r, i) => console.log(`\n[${i}] ${r.outerHTML}`));
 
   await browser.close();
   console.log(`\nスクリーンショット: ${SHOT_DIR}/item_page.png`);
