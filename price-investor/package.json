@@ -5,6 +5,9 @@
   "main": "src/price-research.js",
   "scripts": {
     "start": "node src/price-research.js",
+    "local": "node src/price-research.js",
+    "local:setup": "npm install && npx playwright install chromium",
+    "local:full": "npm install && npx playwright install chromium && node src/price-research.js",
     "test:browser": "node src/browser-test.js",
     "setup": "npx playwright install chromium",
     "debug:kakaku": "node src/debug-kakaku.js",
