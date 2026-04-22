@@ -1,14 +1,14 @@
 /**
- * 上新電機（Joshin）サイト構造調査 v4
+ * 上新電機（Joshin）サイト構造調査 v5
  * npm run debug:joshin
  *
- * 目的: 商品一覧ページのタイル・ブランド・件数の確定
+ * 目的: li=0の原因解明、divベースタイル検出、ブランド絞り込み確認
  */
 const { chromium } = require('playwright');
 
 const URLS = {
-  縦型洗濯機: 'https://joshinweb.jp/kaden/406.html',   // 葉カテゴリ
-  洗濯機全体: 'https://joshinweb.jp/kaden/354.html',
+  縦型洗濯機: 'https://joshinweb.jp/kaden/406.html',
+  洗濯機全体:  'https://joshinweb.jp/kaden/354.html',
 };
 
 (async () => {
@@ -27,64 +27,92 @@ const URLS = {
   for (const [label, url] of Object.entries(URLS)) {
     console.log(`\n====== ${label}: ${url} ======`);
     await page.goto(url, { waitUntil: 'load', timeout: 30000 });
-    await page.waitForTimeout(3000);
-    await page.evaluate(() => window.scrollTo(0, 800));
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(8000); // JS描画待ち
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
+    await page.waitForTimeout(2000);
 
     const info = await page.evaluate(() => {
-      // 1. 価格を持つ要素（これが商品タイル）を探す
+      const title = document.title;
+      const actualUrl = location.href;
+      const totalEls = document.querySelectorAll('*').length;
+
+      // 本文冒頭200文字
+      const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+      // 件数含む要素
+      const countEls = Array.from(document.querySelectorAll('*'))
+        .filter(el => el.children.length === 0 && /[\d,]+(件|商品|点|結果)/.test(el.textContent))
+        .slice(0, 10)
+        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60) }));
+
+      // 価格要素 (任意コンテナ)
       const priceEls = Array.from(document.querySelectorAll('*'))
         .filter(el => el.children.length === 0 && /[\d,]+円/.test(el.textContent))
-        .slice(0, 3)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 30) }));
+        .slice(0, 8)
+        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 40) }));
 
-      // 2. 価格要素の親を辿って商品タイルのクラスを特定
-      const priceTags = Array.from(document.querySelectorAll('*'))
-        .filter(el => el.children.length === 0 && /[\d,]+円/.test(el.textContent));
-      const tileClasses = [...new Set(
-        priceTags.map(el => {
-          let p = el.parentElement;
-          for (let i = 0; i < 5; i++) {
-            if (p && p.tagName === 'LI') return p.className.slice(0, 60);
-            p = p?.parentElement;
-          }
-          return null;
-        }).filter(Boolean)
-      )];
+      // div/article ベースのタイル候補
+      const tileCandidates = [
+        'div[class*="itmUnit"]', 'div[class*="itemUnit"]', 'div[class*="item-unit"]',
+        'div[class*="goods"]',   'div[class*="product"]',  'div[class*="commodity"]',
+        '.itmUnit', '.itemUnit', '.prd',
+        'article',
+        '.listItem', '[class*="listItem"]',
+        'div[class*="list"] > div',
+        'ul[class*="list"] > li',
+      ].map(sel => ({ sel, count: document.querySelectorAll(sel).length }))
+        .filter(r => r.count > 0);
 
-      // 3. 全 li 要素を価格あり / なし に分けてカウント
-      const allLi = document.querySelectorAll('li');
-      const liWithPrice = Array.from(allLi).filter(li => /[\d,]+円/.test(li.textContent));
-      const liWithLink  = Array.from(allLi).filter(li => li.querySelector('a[href*="/kaden/"]'));
+      // li統計
+      const liTotal = document.querySelectorAll('li').length;
+      const liWithPrice = Array.from(document.querySelectorAll('li'))
+        .filter(li => /[\d,]+円/.test(li.textContent)).length;
 
-      // 4. ブランド名を商品から抽出（製品名の冒頭ブランドを推測）
-      // まず商品名要素を探す
-      const nameEls = Array.from(document.querySelectorAll('[class*="name"], [class*="Name"], [class*="itmNm"], [class*="title"]'))
-        .filter(el => el.children.length === 0 && el.textContent.trim().length > 5)
-        .slice(0, 10)
-        .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 40) }));
+      // ブランド/メーカー絞り込み要素
+      const brandEls = Array.from(document.querySelectorAll(
+        '[class*="maker"], [class*="brand"], [class*="Brand"], [class*="Maker"], [class*="mfr"]'
+      ))
+        .filter(el => el.querySelectorAll('a, li, label, input').length > 0)
+        .slice(0, 5)
+        .map(el => ({
+          tag: el.tagName, cls: el.className.slice(0, 80),
+          count: el.querySelectorAll('a, li, label').length,
+          sample: Array.from(el.querySelectorAll('a, li, label')).slice(0, 5)
+            .map(i => i.textContent.trim().slice(0, 20)).join(' | '),
+        }));
 
-      // 5. ページネーション情報
-      const pagination = Array.from(document.querySelectorAll('[class*="page"], [class*="pager"]'))
-        .filter(el => /\d/.test(el.textContent))
-        .slice(0, 3)
-        .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 100) }));
+      // ページネーション
+      const pagerEls = Array.from(document.querySelectorAll('[class*="page"], [class*="pager"], [class*="navi"]'))
+        .filter(el => /\d/.test(el.textContent)).slice(0, 3)
+        .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 100) }));
 
-      // 6. サイドバーのリンク数（カテゴリナビ）
-      const sideNavLinks = document.querySelectorAll('.cate_list a, [class*="cate"] a, [class*="nav"] a').length;
+      // クラス名ヒント
+      const allClasses = [...new Set(
+        Array.from(document.querySelectorAll('*'))
+          .map(el => el.className)
+          .filter(c => typeof c === 'string')
+          .join(' ')
+          .split(/\s+/)
+      )].filter(c => /item|product|goods|list|price|brand|maker|count|result|cate|itm|prd/i.test(c)).slice(0, 60);
 
-      return { priceEls, tileClasses, liTotal: allLi.length, liWithPrice: liWithPrice.length, liWithLink: liWithLink.length, nameEls, pagination, sideNavLinks };
+      return { title, actualUrl, totalEls, bodyText, countEls, priceEls, tileCandidates, liTotal, liWithPrice, brandEls, pagerEls, allClasses };
     });
 
-    console.log('  価格要素サンプル:');
+    console.log(`  title:    ${info.title}`);
+    console.log(`  url:      ${info.actualUrl}`);
+    console.log(`  DOM要素数: ${info.totalEls}  li合計: ${info.liTotal}  価格ありli: ${info.liWithPrice}`);
+    console.log(`  本文冒頭: "${info.bodyText}"`);
+    console.log('  件数含む要素:');
+    info.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
+    console.log('  価格要素:');
     info.priceEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-    console.log(`  li総数: ${info.liTotal}  価格ありli: ${info.liWithPrice}  kadenリンクli: ${info.liWithLink}`);
-    console.log('  商品タイルLIクラス:', info.tileClasses.join(', ') || '(なし)');
-    console.log('  商品名要素サンプル:');
-    info.nameEls.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
+    console.log('  商品タイル候補 (count > 0):');
+    info.tileCandidates.forEach(r => console.log(`    ${r.sel}: ${r.count}`));
+    console.log('  ブランド要素:');
+    info.brandEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> count=${e.count}  "${e.sample}"`));
     console.log('  ページネーション:');
-    info.pagination.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
-    console.log(`  サイドナビリンク数: ${info.sideNavLinks}`);
+    info.pagerEls.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
+    console.log('  クラス名ヒント:', info.allClasses.join(', '));
   }
 
   await browser.close();

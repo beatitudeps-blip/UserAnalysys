@@ -21,7 +21,7 @@ function saveReports(results, date) {
 
   const sites = [...new Set(results.map(r => r.site))];
   for (const site of sites) {
-    const siteLabel = { yodobashi: 'ヨドバシカメラ', biccamera: 'ビックカメラ', edion: 'エディオン' }[site] ?? site;
+    const siteLabel = { yodobashi: 'ヨドバシカメラ', edion: 'エディオン', joshin: '上新電機' }[site] ?? site;
     lines.push(`## ${siteLabel}`, ``);
     lines.push(`| カテゴリ | ブランド数 | 商品数 |`);
     lines.push(`|---|---:|---:|`);
@@ -36,7 +36,7 @@ function saveReports(results, date) {
   lines.push(`| サイト | カテゴリ数 | ブランド数合計 | 商品数合計 |`);
   lines.push(`|---|---:|---:|---:|`);
   for (const site of sites) {
-    const siteLabel = { yodobashi: 'ヨドバシカメラ', biccamera: 'ビックカメラ', edion: 'エディオン' }[site] ?? site;
+    const siteLabel = { yodobashi: 'ヨドバシカメラ', edion: 'エディオン', joshin: '上新電機' }[site] ?? site;
     const rows = results.filter(r => r.site === site);
     const brands   = rows.reduce((s, r) => s + (r.brandCount   ?? 0), 0);
     const products = rows.reduce((s, r) => s + (r.productCount ?? 0), 0);
