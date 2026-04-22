@@ -23,47 +23,41 @@ if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
   await page.waitForTimeout(3000);
   await page.screenshot({ path: path.join(SHOT_DIR, 'item_page.png'), fullPage: true });
 
-  // ── p-priceList_ クラスの構造を詳細調査 ──
+  // li.p-priceList_item が出るまで待機（遅延ロード対応）
+  await page.waitForSelector('li.p-priceList_item', { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(1500);
+
+  // ── 実際のアイテム行を詳細調査 ──
   const info = await page.evaluate(() => {
-    // priceList 配下のアイテムを取得
-    const listItems = document.querySelectorAll('[class*="p-priceList_item"], [class*="p-priceList"] li');
-    console.log('listItems count:', listItems.length);
+    const items = Array.from(document.querySelectorAll('li.p-priceList_item'));
 
-    const rows = [];
-    for (const li of Array.from(listItems).slice(0, 5)) {
-      rows.push({
-        outerHTML: li.outerHTML.replace(/\s+/g, ' ').slice(0, 500),
-      });
-    }
+    // 先頭3件のHTML
+    const sampleRows = items.slice(0, 3).map(li => ({
+      outerHTML: li.outerHTML.replace(/\s+/g, ' ').slice(0, 600),
+    }));
 
-    // p-priceList_ で始まるクラスを全収集
-    const priceClasses = new Set();
-    document.querySelectorAll('[class*="p-priceList_"]').forEach(el => {
-      el.className.split(' ').filter(c => c.startsWith('p-priceList_')).forEach(c => priceClasses.add(c));
-    });
+    // 全ショップ名と価格を抽出
+    const shops = items.map(li => {
+      const shopEl    = li.querySelector('.p-priceList_shopNameSub');
+      const priceEl   = li.querySelector('.p-priceList_priceMain');
+      const currEl    = li.querySelector('.p-priceList_currency');
+      const priceCont = li.querySelector('.p-priceList_priceCont');
+      return {
+        shop:      shopEl?.textContent.trim() ?? '',
+        priceMain: priceEl?.textContent.trim().replace(/\s+/g, '') ?? '',
+        currency:  currEl?.textContent.trim() ?? '',
+        priceCont: priceCont?.textContent.trim().replace(/\s+/g, ' ') ?? '',
+      };
+    }).filter(r => r.shop);
 
-    // 価格らしい要素 (¥ を含む) の情報
-    const priceEls = Array.from(document.querySelectorAll('[class*="p-priceList_"]'))
-      .filter(el => /[¥￥]/.test(el.textContent))
-      .slice(0, 5)
-      .map(el => ({ class: el.className, text: el.textContent.trim().replace(/\s+/g, ' ').slice(0, 50) }));
-
-    return {
-      listItemCount: listItems.length,
-      sampleRows: rows,
-      priceListClasses: [...priceClasses].sort(),
-      priceElements: priceEls,
-    };
+    return { itemCount: items.length, sampleRows, shops };
   });
 
-  console.log('\n=== p-priceList_ 構造調査 ===');
-  console.log(`リストアイテム数: ${info.listItemCount}`);
-  console.log('\n--- p-priceList_ クラス一覧 ---');
-  info.priceListClasses.forEach(c => console.log('  ' + c));
-  console.log('\n--- 価格要素 (¥含む) ---');
-  info.priceElements.forEach(e => console.log(`  class="${e.class}"\n    text="${e.text}"`));
-  console.log('\n--- サンプルHTML (先頭5件) ---');
-  info.sampleRows.forEach((r, i) => console.log(`\n[${i}] ${r.outerHTML}`));
+  console.log(`\nアイテム数: ${info.itemCount}`);
+  console.log('\n--- サンプルHTML (先頭3件) ---');
+  info.sampleRows.forEach((r, i) => console.log(`\n[${i}]\n${r.outerHTML}`));
+  console.log('\n--- 全ショップ価格 ---');
+  info.shops.forEach(s => console.log(`  shop="${s.shop}" currency="${s.currency}" priceMain="${s.priceMain}" priceCont="${s.priceCont}"`));
 
   await browser.close();
   console.log(`\nスクリーンショット: ${SHOT_DIR}/item_page.png`);
