@@ -145,6 +145,7 @@ async function getBic(page, query) {
 
   const browser = await chromium.launch({
     headless: false,
+    executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
     args: [
       '--no-sandbox',
       '--disable-blink-features=AutomationControlled',
