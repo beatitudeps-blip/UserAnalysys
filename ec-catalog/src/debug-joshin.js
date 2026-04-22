@@ -1,14 +1,17 @@
 /**
- * 上新電機（Joshin）サイト構造調査 v6
+ * 上新電機（Joshin）サイト構造調査 v7
  * npm run debug:joshin
  *
- * 目的: price/itemクラス要素の中身・件数取得方法の確定
+ * 目的:
+ *  1. 総商品数要素の確定（全XX件 or XX件ヒット）
+ *  2. ブランドcate_listの件数ロジック確認
+ *  3. ホームページからのカテゴリURL取得確認
  */
 const { chromium } = require('playwright');
 
 const URLS = {
-  洗濯機:     'https://joshinweb.jp/kaden/354.html',
-  冷蔵庫:     'https://joshinweb.jp/kaden/307.html',
+  ホームページ:    'https://joshinweb.jp/',
+  AV接続ケーブル:  'https://joshinweb.jp/kaden/307.html',
 };
 
 (async () => {
@@ -24,109 +27,100 @@ const URLS = {
   await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); window.chrome = { runtime: {} }; });
   const page = await context.newPage();
 
-  for (const [label, url] of Object.entries(URLS)) {
-    console.log(`\n====== ${label}: ${url} ======`);
-    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
-    await page.waitForTimeout(8000);
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
-    await page.waitForTimeout(2000);
+  // ── ホームページ: カテゴリURLを取得 ──
+  console.log('\n====== ホームページ: カテゴリURL一覧 ======');
+  await page.goto('https://joshinweb.jp/', { waitUntil: 'load', timeout: 30000 });
+  await page.waitForTimeout(5000);
 
-    const info = await page.evaluate(() => {
-      const title = document.title;
-      const actualUrl = location.href;
+  const homeInfo = await page.evaluate(() => {
+    // kaden/数字.html パターンのリンクを全収集
+    const seen = new Set();
+    const links = Array.from(document.querySelectorAll('a[href*="/kaden/"]'))
+      .filter(a => /\/kaden\/\d+\.html$/.test(a.href))
+      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' '), href: a.href }))
+      .filter(l => l.text && l.text.length > 1 && !seen.has(l.href) && seen.add(l.href));
 
-      // Access Denied チェック
-      if (document.querySelectorAll('*').length < 20) {
-        return { blocked: true, title, actualUrl };
-      }
+    // maincategory_list 内のリンクも確認
+    const mainCatLinks = Array.from(document.querySelectorAll('.maincategory_list a'))
+      .map(a => ({ text: a.textContent.trim(), href: a.href }))
+      .filter(l => l.text);
 
-      // 1. 件数含む全テキスト（円なし含む）
-      const countEls = Array.from(document.querySelectorAll('*'))
-        .filter(el => el.children.length === 0 && /[\d,]+(件|商品|点|結果|アイテム)/.test(el.textContent))
-        .slice(0, 10)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 80) }));
+    return { kadenLinks: links.slice(0, 30), mainCatLinks: mainCatLinks.slice(0, 20) };
+  });
 
-      // 2. .price / .search_container_price / .item 等の中身サンプル
-      const priceClsSamples = Array.from(document.querySelectorAll(
-        '.price, .search_container_price, .discount_price_list, .special_price_display, [class*="price"]'
-      ))
-        .filter(el => el.textContent.trim().length > 0)
-        .slice(0, 10)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60) }));
+  console.log(`  kaden/数字.html リンク: ${homeInfo.kadenLinks.length}件`);
+  homeInfo.kadenLinks.slice(0, 15).forEach(l => console.log(`    ${l.href}  "${l.text}"`));
+  console.log(`  maincategory_list リンク: ${homeInfo.mainCatLinks.length}件`);
+  homeInfo.mainCatLinks.forEach(l => console.log(`    ${l.href}  "${l.text}"`));
 
-      // 3. li.item または div.item サンプル
-      const itemEls = Array.from(document.querySelectorAll('li.item, div.item, [class="item"]'))
-        .slice(0, 5)
-        .map(el => ({ tag: el.tagName, cls: el.className, text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 100) }));
+  // ── 307.html (AV接続ケーブル): セレクタ確認 ──
+  console.log('\n====== AV接続ケーブル: https://joshinweb.jp/kaden/307.html ======');
+  await page.goto('https://joshinweb.jp/kaden/307.html', { waitUntil: 'load', timeout: 30000 });
+  await page.waitForTimeout(8000);
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2));
+  await page.waitForTimeout(2000);
 
-      // 4. select要素（20件/40件/100件）の親コンテキスト
-      const selectEls = Array.from(document.querySelectorAll('select'))
-        .map(el => ({
-          cls: el.className.slice(0, 60),
-          options: Array.from(el.querySelectorAll('option')).map(o => o.textContent.trim()).join(' / '),
-          parentText: el.closest('[class]')?.className.slice(0, 80) || '',
-        }));
+  const info = await page.evaluate(() => {
+    if (document.querySelectorAll('*').length < 20) return { blocked: true };
 
-      // 5. .cate_list の構造（商品orカテゴリ？）
-      const cateLists = Array.from(document.querySelectorAll('.cate_list'))
-        .slice(0, 3)
-        .map(el => ({
-          cls: el.className,
-          liCount: el.querySelectorAll('li').length,
-          sample: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 120),
-        }));
+    // 1. 総商品数: 子要素あり含めて「全XX件」「XX件中」「XX件ヒット」を広く探す
+    const countCandidates = Array.from(document.querySelectorAll('*'))
+      .filter(el => {
+        const t = el.textContent.trim();
+        return t.length < 60 && /全[\d,]+件|[\d,]+件[中ヒット]/.test(t);
+      })
+      .slice(0, 10)
+      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60) }));
 
-      // 6. ul[class*="list"] > li のサンプル（最初の3つ）
-      const listLiSamples = Array.from(document.querySelectorAll('ul[class*="list"] > li'))
-        .slice(0, 3)
-        .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 100) }));
+    // 2. div.search_container_price の数（ページ上の商品タイル数）
+    const visibleProducts = document.querySelectorAll('div.search_container_price').length;
 
-      // 7. ブランド絞り込み再調査（チェックボックス・リンクリスト）
-      const filterAreas = Array.from(document.querySelectorAll('[id*="maker"], [id*="brand"], [class*="maker"], [class*="brand"]'))
-        .filter(el => el.querySelectorAll('input, a, label').length > 1)
-        .slice(0, 5)
-        .map(el => ({ tag: el.tagName, id: el.id, cls: el.className.slice(0, 60), count: el.querySelectorAll('input, a, label').length, sample: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 80) }));
+    // 3. cate_list のうち (数字) 含むものの詳細
+    const brandCateList = Array.from(document.querySelectorAll('.cate_list'))
+      .filter(el => /\(\d+\)/.test(el.textContent))
+      .map(el => {
+        const lis = el.querySelectorAll('li');
+        const nums = Array.from(el.textContent.matchAll(/\((\d+)\)/g)).map(m => parseInt(m[1], 10));
+        const total = nums.reduce((s, n) => s + n, 0);
+        const sample = Array.from(lis).slice(0, 5).map(li => li.textContent.trim().slice(0, 20)).join(' | ');
+        return { liCount: lis.length, numTotal: total, sample };
+      });
 
-      // 8. ¥付き価格
-      const yenPrices = Array.from(document.querySelectorAll('*'))
-        .filter(el => el.children.length === 0 && /¥[\d,]+/.test(el.textContent))
-        .slice(0, 5)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 40) }));
+    // 4. ページネーション（ページ数から総件数を推定）
+    const pagerText = Array.from(document.querySelectorAll('[class*="pager"], [class*="page"], [class*="navi"]'))
+      .filter(el => /\d+/.test(el.textContent))
+      .slice(0, 5)
+      .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 120) }));
 
-      return { blocked: false, title, actualUrl, countEls, priceClsSamples, itemEls, selectEls, cateLists, listLiSamples, filterAreas, yenPrices };
-    });
+    // 5. 現在のページの div.price テキストサンプル（価格フォーマット再確認）
+    const priceSamples = Array.from(document.querySelectorAll('div.price'))
+      .slice(0, 5)
+      .map(el => el.textContent.trim().slice(0, 30));
 
-    if (info.blocked) {
-      console.log(`  !! ACCESS DENIED (DOM要素6以下) !!`);
-      continue;
-    }
+    // 6. ナビ内のkaden数字.htmlリンク（サイドカテゴリナビ）
+    const seen = new Set();
+    const sideLinks = Array.from(document.querySelectorAll('a[href*="/kaden/"]'))
+      .filter(a => /\/kaden\/\d+\.html$/.test(a.href))
+      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' '), href: a.href }))
+      .filter(l => l.text && l.text.length > 1 && !seen.has(l.href) && seen.add(l.href))
+      .slice(0, 20);
 
-    console.log(`  title: ${info.title}`);
-    console.log(`  url:   ${info.actualUrl}`);
+    return { blocked: false, countCandidates, visibleProducts, brandCateList, pagerText, priceSamples, sideLinks };
+  });
 
-    console.log('  件数含む要素:');
-    info.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-
-    console.log('  priceクラス要素サンプル:');
-    info.priceClsSamples.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-
-    console.log('  ¥価格要素:');
-    info.yenPrices.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-
-    console.log('  li.item / div.item サンプル:');
-    info.itemEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-
-    console.log('  ul[class*="list"] > li サンプル:');
-    info.listLiSamples.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
-
-    console.log('  select要素:');
-    info.selectEls.forEach(e => console.log(`    [${e.cls}] ${e.options}  (parent: ${e.parentText})`));
-
-    console.log('  .cate_list 構造:');
-    info.cateLists.forEach(e => console.log(`    [${e.cls}] li数=${e.liCount}  "${e.sample}"`));
-
-    console.log('  ブランド絞り込み:');
-    info.filterAreas.forEach(e => console.log(`    <${e.tag} id="${e.id}" class="${e.cls}"> count=${e.count}  "${e.sample}"`));
+  if (info.blocked) {
+    console.log('  !! ACCESS DENIED !!');
+  } else {
+    console.log(`  表示商品タイル数 (div.search_container_price): ${info.visibleProducts}`);
+    console.log('  総商品数候補 (全XX件 / XX件中):');
+    info.countCandidates.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
+    console.log('  ブランドcate_list:');
+    info.brandCateList.forEach(e => console.log(`    li数=${e.liCount}  数字合計=${e.numTotal}  sample: ${e.sample}`));
+    console.log('  ページネーション:');
+    info.pagerText.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
+    console.log('  価格サンプル:', info.priceSamples.join(' | '));
+    console.log(`  サイド kaden リンク: ${info.sideLinks.length}件`);
+    info.sideLinks.forEach(l => console.log(`    ${l.href}  "${l.text}"`));
   }
 
   await browser.close();
