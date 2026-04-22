@@ -1,4 +1,2 @@
 node_modules/
-price-list-*.md
-debug-*.js
-screenshots/
+output/

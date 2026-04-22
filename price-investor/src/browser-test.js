@@ -3,21 +3,21 @@ const fs = require('fs');
 const path = require('path');
 
 const SITES = [
-  { name: 'kakaku_tv',   url: 'https://kakaku.com/kaden/tv/ranking/' },
-  { name: 'edion',       url: 'https://www.edion.com/' },
-  { name: 'yodobashi',   url: 'https://www.yodobashi.com/' },
-  { name: 'amazon',      url: 'https://www.amazon.co.jp/' },
-  { name: 'biccamera',   url: 'https://www.biccamera.com/bc/main/' },
+  { name: 'kakaku_tv',  url: 'https://kakaku.com/kaden/tv/ranking/' },
+  { name: 'edion',      url: 'https://www.edion.com/' },
+  { name: 'yodobashi',  url: 'https://www.yodobashi.com/' },
+  { name: 'amazon',     url: 'https://www.amazon.co.jp/' },
+  { name: 'biccamera',  url: 'https://www.biccamera.com/bc/main/' },
 ];
 
-const outDir = path.join(__dirname, 'screenshots');
-if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
+const outDir = path.join(__dirname, '..', 'output', 'screenshots');
+if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 
 (async () => {
-  console.log('ブラウザ起動中 (headless=false, xvfb)...\n');
+  console.log('ブラウザ起動中...\n');
   const browser = await chromium.launch({
     headless: false,
-    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled'],
+    args: ['--disable-blink-features=AutomationControlled'],
   });
   const context = await browser.newContext({
     userAgent:
@@ -34,12 +34,10 @@ if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
     try {
       const res = await page.goto(site.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
       await page.waitForTimeout(2500);
-      const status = res?.status();
-      const title  = await page.title();
-      const shot   = path.join(outDir, `${site.name}.png`);
+      const shot = path.join(outDir, `${site.name}.png`);
       await page.screenshot({ path: shot, fullPage: false });
-      console.log(`  ステータス: ${status}`);
-      console.log(`  タイトル  : ${title}`);
+      console.log(`  ステータス : ${res?.status()}`);
+      console.log(`  タイトル   : ${await page.title()}`);
       console.log(`  スクリーンショット: ${shot}\n`);
     } catch (e) {
       console.log(`  エラー: ${e.message.split('\n')[0]}\n`);
@@ -47,5 +45,5 @@ if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
   }
 
   await browser.close();
-  console.log('完了。screenshots/ フォルダを確認してください。');
+  console.log(`完了。output/screenshots/ を確認してください。`);
 })();

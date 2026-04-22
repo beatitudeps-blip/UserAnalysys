@@ -1,21 +1,12 @@
-/**
- * 家電カテゴリ ランキング商品 価格比較スクリプト
- *
- * 実行方法（ローカルPC推奨）:
- *   node price-research.js
- *
- * 依存:
- *   npm install playwright
- *   npx playwright install chromium
- */
-
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 
+const OUTPUT_DIR = path.join(__dirname, '..', 'output');
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR);
+
 // ──────────────────────────────────────────────
 // 調査対象商品リスト（kakaku.com ランキング上位 代表モデル）
-// 必要に応じて書き換えてください
 // ──────────────────────────────────────────────
 const PRODUCTS = [
   { category: 'テレビ',     name: 'Sony BRAVIA XRJ-55X90L' },
@@ -39,16 +30,11 @@ const PRODUCTS = [
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const rand  = (a = 1200, b = 2500) => sleep(a + Math.floor(Math.random() * (b - a)));
 
-// ──────────────────────────────────────────────
-// 共通: ページから最初の価格テキストを取得
-// ──────────────────────────────────────────────
 async function firstPrice(page, selectors) {
   return page.evaluate((sels) => {
     for (const sel of sels) {
-      const els = document.querySelectorAll(sel);
-      for (const el of els) {
+      for (const el of document.querySelectorAll(sel)) {
         const t = el.textContent.trim().replace(/\s+/g, '');
-        // 数字と円記号・カンマを含む文字列だけ採用
         if (/[¥￥,\d]/.test(t) && t.length < 30) return t;
       }
     }
@@ -56,9 +42,6 @@ async function firstPrice(page, selectors) {
   }, selectors);
 }
 
-// ──────────────────────────────────────────────
-// エディオン
-// ──────────────────────────────────────────────
 async function getEdion(page, query) {
   try {
     await page.goto(
@@ -67,15 +50,11 @@ async function getEdion(page, query) {
     );
     await rand(800, 1500);
     return await firstPrice(page, [
-      '.selling_price', '.item_price .price', '.p-price__main',
-      '[class*="price"]', '.Price',
+      '.selling_price', '.item_price .price', '.p-price__main', '[class*="price"]',
     ]);
   } catch { return 'エラー'; }
 }
 
-// ──────────────────────────────────────────────
-// ヨドバシ
-// ──────────────────────────────────────────────
 async function getYodobashi(page, query) {
   try {
     await page.goto(
@@ -83,20 +62,13 @@ async function getYodobashi(page, query) {
       { waitUntil: 'domcontentloaded', timeout: 20000 }
     );
     await rand(800, 1500);
-    // 検索結果ページで最初の商品価格を取得
-    await page.waitForSelector('.priceSingle, .price, .js-refine-submit', {
-      timeout: 5000,
-    }).catch(() => {});
+    await page.waitForSelector('.priceSingle, .productPrice', { timeout: 5000 }).catch(() => {});
     return await firstPrice(page, [
-      '.priceSingle', '.productPrice', '.price strong',
-      '[class*="price"]',
+      '.priceSingle', '.productPrice', '.price strong', '[class*="price"]',
     ]);
   } catch { return 'エラー'; }
 }
 
-// ──────────────────────────────────────────────
-// Amazon.co.jp
-// ──────────────────────────────────────────────
 async function getAmazon(page, query) {
   try {
     await page.goto(
@@ -105,24 +77,15 @@ async function getAmazon(page, query) {
     );
     await rand(1000, 2000);
     return await page.evaluate(() => {
-      // a-price-whole + fraction を結合
-      const whole = document.querySelector(
-        '.s-result-item:not([data-asin=""]) .a-price-whole'
-      );
-      const frac  = document.querySelector(
-        '.s-result-item:not([data-asin=""]) .a-price-fraction'
-      );
-      if (whole) return '¥' + whole.textContent.trim().replace(/[^\d,]/g, '') +
-                        (frac ? frac.textContent.trim() : '');
+      const whole = document.querySelector('.s-result-item:not([data-asin=""]) .a-price-whole');
+      const frac  = document.querySelector('.s-result-item:not([data-asin=""]) .a-price-fraction');
+      if (whole) return '¥' + whole.textContent.trim().replace(/[^\d,]/g, '') + (frac?.textContent.trim() ?? '');
       const off = document.querySelector('.a-offscreen');
       return off ? off.textContent.trim() : '取得不可';
     });
   } catch { return 'エラー'; }
 }
 
-// ──────────────────────────────────────────────
-// ビックカメラ
-// ──────────────────────────────────────────────
 async function getBic(page, query) {
   try {
     await page.goto(
@@ -131,24 +94,17 @@ async function getBic(page, query) {
     );
     await rand(800, 1500);
     return await firstPrice(page, [
-      '.js-item-price', '.real_price', '.item-price',
-      '.price_box .price', '[class*="price"]',
+      '.js-item-price', '.real_price', '.item-price', '.price_box .price', '[class*="price"]',
     ]);
   } catch { return 'エラー'; }
 }
 
-// ──────────────────────────────────────────────
-// メイン
-// ──────────────────────────────────────────────
 (async () => {
   console.log('ブラウザを起動中...\n');
 
   const browser = await chromium.launch({
     headless: false,
-    args: [
-      '--no-sandbox',
-      '--disable-blink-features=AutomationControlled',
-    ],
+    args: ['--disable-blink-features=AutomationControlled'],
   });
 
   const context = await browser.newContext({
@@ -165,7 +121,6 @@ async function getBic(page, query) {
 
   for (const product of PRODUCTS) {
     console.log(`\n[${product.category}] ${product.name}`);
-
     const row = { ...product, edion: null, yodobashi: null, amazon: null, bic: null };
 
     console.log('  → Edion...');
@@ -193,12 +148,10 @@ async function getBic(page, query) {
 
   await browser.close();
 
-  // ── Markdown 出力 ──
   const date = new Date().toISOString().slice(0, 10);
   const categories = [...new Set(results.map(r => r.category))];
 
   let md = `# 家電カテゴリ 人気商品 価格比較\n\n調査日: ${date}\n\n`;
-
   for (const cat of categories) {
     md += `## ${cat}\n\n`;
     md += `| 商品名 | エディオン | ヨドバシ | Amazon | ビックカメラ |\n`;
@@ -209,9 +162,8 @@ async function getBic(page, query) {
     md += '\n';
   }
 
-  const outPath = path.join(__dirname, `price-list-${date}.md`);
+  const outPath = path.join(OUTPUT_DIR, `price-list-${date}.md`);
   fs.writeFileSync(outPath, md, 'utf-8');
-
   console.log(`\n✓ 結果を保存しました: ${outPath}`);
   console.log('\n' + md);
 })();

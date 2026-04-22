@@ -2,12 +2,13 @@
   "name": "price-investor",
   "version": "1.0.0",
   "description": "家電ECサイト価格比較ツール（Playwright）",
-  "main": "price-research.js",
+  "main": "src/price-research.js",
   "scripts": {
-    "start": "node price-research.js",
-    "install:browsers": "npx playwright install chromium"
+    "start": "node src/price-research.js",
+    "test:browser": "node src/browser-test.js",
+    "setup": "npx playwright install chromium"
   },
   "dependencies": {
-    "playwright": "1.56.1"
+    "playwright": "^1.44.0"
   }
 }
