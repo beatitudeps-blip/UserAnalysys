@@ -1,8 +1,11 @@
 /**
- * ヨドバシカメラ サイト構造調査
+ * ヨドバシカメラ サイト構造調査 v2
  * npm run debug:yodobashi
  */
 const { chromium } = require('playwright');
+
+// 家電カテゴリ（テレビ）で具体的に調査
+const TEST_CATEGORY_URL = 'https://www.yodobashi.com/category/6353/';  // 家電
 
 (async () => {
   const browser = await chromium.launch({ headless: false, args: ['--disable-blink-features=AutomationControlled'] });
@@ -12,55 +15,92 @@ const { chromium } = require('playwright');
   });
   const page = await context.newPage();
 
-  console.log('=== ヨドバシ トップページ ナビ構造 ===');
-  await page.goto('https://www.yodobashi.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(2000);
+  // ── 1. 家電カテゴリページ ──
+  console.log(`\n=== 家電カテゴリページ: ${TEST_CATEGORY_URL} ===`);
+  await page.goto(TEST_CATEGORY_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(3000);
 
-  const info = await page.evaluate(() => {
-    // ナビリンクを収集
-    const navLinks = Array.from(document.querySelectorAll('a[href]'))
-      .filter(a => a.href.includes('/category/') || a.href.includes('/c/'))
-      .slice(0, 20)
-      .map(a => ({ text: a.textContent.trim().slice(0, 30), href: a.href.slice(0, 100), cls: a.className.slice(0, 50) }));
+  const catPage = await page.evaluate(() => {
+    // 「件」を含む全テキストノード
+    const countEls = Array.from(document.querySelectorAll('*'))
+      .filter(el => el.children.length === 0 && /[\d,]+件/.test(el.textContent))
+      .slice(0, 10)
+      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60) }));
 
-    // ナビ要素のクラス名サンプル
-    const navEls = Array.from(document.querySelectorAll('nav, [class*="nav"], [class*="Nav"]'))
-      .slice(0, 5)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80) }));
+    // ブランド/メーカー関連要素のHTML
+    const brandEls = Array.from(document.querySelectorAll('[class*="brand"], [class*="Brand"], [class*="maker"], [class*="Maker"]'))
+      .slice(0, 8)
+      .map(el => ({
+        tag: el.tagName,
+        cls: el.className.slice(0, 80),
+        childCount: el.children.length,
+        liCount: el.querySelectorAll('li').length,
+        aCount:  el.querySelectorAll('a').length,
+        innerText: el.innerText?.slice(0, 120).replace(/\n/g, ' | '),
+      }));
 
-    return { navLinks, navEls };
+    // サブカテゴリへのリンク
+    const subCats = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+      .slice(0, 10)
+      .map(a => ({ text: a.textContent.trim().slice(0, 30), href: a.href.slice(0, 100) }));
+
+    // ページ内の全クラス名からブランド候補を探す
+    const allClasses = [...new Set(
+      Array.from(document.querySelectorAll('*'))
+        .map(el => el.className)
+        .filter(c => typeof c === 'string' && c.length > 0)
+        .join(' ').split(/\s+/)
+    )].filter(c => /brand|Brand|maker|Maker|vendor|mfr|count|result|total/i.test(c)).slice(0, 30);
+
+    return { countEls, brandEls, subCats, allClasses };
   });
 
-  console.log('\n--- カテゴリリンク (先頭20件) ---');
-  info.navLinks.forEach(l => console.log(`  [${l.cls}] ${l.text} => ${l.href}`));
-  console.log('\n--- nav要素サンプル ---');
-  info.navEls.forEach(e => console.log(`  <${e.tag} class="${e.cls}">`));
+  console.log('\n--- 件数表示要素 (「件」を含む) ---');
+  catPage.countEls.forEach(e => console.log(`  <${e.tag} class="${e.cls}"> → "${e.text}"`));
 
-  // カテゴリページの商品数・ブランド数構造を調査
-  if (info.navLinks.length > 0) {
-    console.log(`\n=== カテゴリページ構造調査: ${info.navLinks[0].href} ===`);
-    await page.goto(info.navLinks[0].href, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.waitForTimeout(2000);
+  console.log('\n--- ブランド/メーカー関連要素 ---');
+  catPage.brandEls.forEach(e =>
+    console.log(`  <${e.tag} class="${e.cls}"> children=${e.childCount} li=${e.liCount} a=${e.aCount}\n    text: ${e.innerText}`)
+  );
 
-    const catInfo = await page.evaluate(() => {
-      // 商品数っぽいテキストを持つ要素
+  console.log('\n--- サブカテゴリリンク ---');
+  catPage.subCats.forEach(s => console.log(`  ${s.text} => ${s.href}`));
+
+  console.log('\n--- ブランド/件数関連クラス名一覧 ---');
+  console.log(' ', catPage.allClasses.join(', '));
+
+  // ── 2. サブカテゴリ（テレビ等）に潜って商品一覧ページを確認 ──
+  const subCatUrl = catPage.subCats[0]?.href;
+  if (subCatUrl) {
+    console.log(`\n=== サブカテゴリページ: ${subCatUrl} ===`);
+    await page.goto(subCatUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(3000);
+
+    const subPage = await page.evaluate(() => {
       const countEls = Array.from(document.querySelectorAll('*'))
-        .filter(el => el.children.length === 0 && /\d+件/.test(el.textContent))
-        .slice(0, 5)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 40) }));
+        .filter(el => el.children.length === 0 && /[\d,]+件/.test(el.textContent))
+        .slice(0, 10)
+        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60) }));
 
-      // ブランド・メーカー絞り込みリスト
-      const brandEls = Array.from(document.querySelectorAll('[class*="maker"], [class*="brand"], [class*="Brand"], [class*="Maker"]'))
-        .slice(0, 5)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), liCount: el.querySelectorAll('li').length }));
+      const brandEls = Array.from(document.querySelectorAll('[class*="brand"], [class*="Brand"], [class*="maker"], [class*="Maker"]'))
+        .slice(0, 8)
+        .map(el => ({
+          tag: el.tagName,
+          cls: el.className.slice(0, 80),
+          liCount: el.querySelectorAll('li').length,
+          aCount:  el.querySelectorAll('a').length,
+          innerText: el.innerText?.slice(0, 200).replace(/\n/g, ' | '),
+        }));
 
       return { countEls, brandEls };
     });
 
     console.log('\n--- 件数表示要素 ---');
-    catInfo.countEls.forEach(e => console.log(`  <${e.tag} class="${e.cls}"> ${e.text}`));
-    console.log('\n--- ブランド絞り込み要素 ---');
-    catInfo.brandEls.forEach(e => console.log(`  <${e.tag} class="${e.cls}"> li=${e.liCount}`));
+    subPage.countEls.forEach(e => console.log(`  <${e.tag} class="${e.cls}"> → "${e.text}"`));
+    console.log('\n--- ブランド/メーカー関連要素 ---');
+    subPage.brandEls.forEach(e =>
+      console.log(`  <${e.tag} class="${e.cls}"> li=${e.liCount} a=${e.aCount}\n    text: ${e.innerText}`)
+    );
   }
 
   await browser.close();
