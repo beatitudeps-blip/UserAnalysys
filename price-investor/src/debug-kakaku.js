@@ -1,7 +1,6 @@
 /**
- * kakaku.com URL構造調査スクリプト
+ * kakaku.com URL構造調査スクリプト v2
  * 実行: node src/debug-kakaku.js
- * → output/screenshots/ にスクリーンショットを保存
  */
 const { chromium } = require('playwright');
 const fs   = require('fs');
@@ -9,15 +8,6 @@ const path = require('path');
 
 const SHOT_DIR = path.join(__dirname, '..', 'output', 'screenshots');
 if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
-
-const URLS = [
-  'https://kakaku.com/',
-  'https://kakaku.com/kaden/tv/',
-  'https://kakaku.com/kaden/tv/ranking/',
-  'https://kakaku.com/ranking/',
-  'https://kakaku.com/ranking_category/104/',
-  'https://kakaku.com/kaden/',
-];
 
 (async () => {
   const browser = await chromium.launch({ headless: false, args: ['--disable-blink-features=AutomationControlled'] });
@@ -27,35 +17,47 @@ const URLS = [
   });
   const page = await context.newPage();
 
-  for (const url of URLS) {
-    const label = url.replace(/[^a-z0-9]/gi, '_').slice(0, 40);
-    process.stdout.write(`${url} → `);
-    try {
-      const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      await page.waitForTimeout(2000);
-      const status = res.status();
-      const finalUrl = page.url();
-      const title = await page.title();
-      const shot = path.join(SHOT_DIR, `${label}.png`);
-      await page.screenshot({ path: shot });
-      console.log(`${status} | ${title} | 最終URL: ${finalUrl}`);
-    } catch (e) {
-      console.log(`ERROR: ${e.message.split('\n')[0]}`);
-    }
-  }
+  // ── /ranking/ ページのカテゴリリンクを調査 ──
+  console.log('\n=== /ranking/ ページ調査 ===');
+  await page.goto('https://kakaku.com/ranking/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(SHOT_DIR, 'ranking_top.png') });
 
-  // テレビカテゴリページでランキングリンクを探す
-  console.log('\n--- テレビページのランキング関連リンクを調査 ---');
-  await page.goto('https://kakaku.com/kaden/tv/', { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-  await page.waitForTimeout(2000);
-  const rankLinks = await page.evaluate(() =>
-    Array.from(document.querySelectorAll('a'))
-      .filter(a => /ランキング|ranking|rank/i.test(a.textContent + a.href))
-      .slice(0, 10)
-      .map(a => ({ text: a.textContent.trim().slice(0, 40), href: a.href }))
+  const rankingLinks = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('a[href*="ranking"]'))
+      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 50), href: a.href }))
+      .filter(a => a.text && a.href.includes('kakaku.com'))
+      .slice(0, 30)
   );
-  console.log('ランキング関連リンク:', JSON.stringify(rankLinks, null, 2));
+  console.log('ランキングリンク一覧:');
+  rankingLinks.forEach(l => console.log(`  ${l.text} → ${l.href}`));
+
+  // ── /kaden/ ページのサブカテゴリリンクを調査 ──
+  console.log('\n=== /kaden/ ページ調査 ===');
+  await page.goto('https://kakaku.com/kaden/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForTimeout(2500);
+  await page.screenshot({ path: path.join(SHOT_DIR, 'kaden_top.png') });
+
+  const kadenLinks = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('a'))
+      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 50), href: a.href }))
+      .filter(a => a.text && /kakaku\.com\/(kaden|item|cat)/.test(a.href) && a.href !== 'https://kakaku.com/kaden/')
+      .slice(0, 40)
+  );
+  console.log('/kaden/ サブカテゴリリンク:');
+  kadenLinks.forEach(l => console.log(`  ${l.text} → ${l.href}`));
+
+  // ── /ranking/ ページで家電カテゴリを直接クリックして遷移確認 ──
+  console.log('\n=== ランキングページで家電カテゴリ選択 ===');
+  await page.goto('https://kakaku.com/ranking/', { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await page.waitForTimeout(2000);
+  const kadenRankLink = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll('a'));
+    const found = links.find(a => /家電|冷蔵庫|テレビ|洗濯/.test(a.textContent));
+    return found ? { text: found.textContent.trim(), href: found.href } : null;
+  });
+  console.log('家電関連リンク:', kadenRankLink);
 
   await browser.close();
-  console.log(`\nスクリーンショット: ${SHOT_DIR}`);
+  console.log(`\nスクリーンショット保存先: ${SHOT_DIR}`);
 })();
