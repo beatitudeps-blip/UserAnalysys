@@ -34,10 +34,17 @@ async function scrapePricesFromKakaku(page, itemUrl, sleep) {
     const shopPrices = await page.evaluate(() => {
       const results = [];
       for (const item of document.querySelectorAll('li.p-priceList_item')) {
-        // ショップ名: 直接表示 or tooltip
-        const shopEl = item.querySelector('.p-priceList_shopNameSub') ||
-                       item.querySelector('.p-tooltip_txt');
-        const shop = shopEl?.textContent.trim();
+        // ショップ名: 専用要素 → li全体テキスト検索（Yodobashi/Amazon名称マッチ）
+        let shop = item.querySelector('.p-priceList_shopNameSub')?.textContent.trim() || '';
+
+        if (!shop) {
+          const text = item.textContent || '';
+          if (/ヨドバシ|yodobashi/i.test(text))           shop = 'ヨドバシ';
+          else if (/Amazon|アマゾン/i.test(text))         shop = 'Amazon';
+          else if (/ビックカメラ|biccamera/i.test(text))  shop = 'ビックカメラ';
+          else if (/エディオン|EDION/i.test(text))        shop = 'エディオン';
+        }
+
         if (!shop) continue;
 
         // 価格: "162,800 円" → "162,800円"
