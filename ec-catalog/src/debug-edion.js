@@ -1,11 +1,15 @@
 /**
- * エディオン サイト構造調査 v2
+ * エディオン サイト構造調査 v3
  * npm run debug:edion
  *
- * 前回: URLパターン /member/ /guide/ /order/ /e_store/ のみ検出 → 商品カテゴリなし
- * 今回: JS描画後・ナビ操作・直接カテゴリURL試行
+ * 前回判明: カテゴリURL = category001.html?c_cd=001XXX
+ * 今回: category001ページの商品数・ブランド構造を調査
  */
 const { chromium } = require('playwright');
+
+// 確認済みカテゴリURL
+const CAT_URL  = 'https://www.edion.com/category001.html?c_cd=001001'; // 冷蔵庫・洗濯機
+const CAT_LIST = 'https://www.edion.com/category_list.html';           // カテゴリ一覧
 
 (async () => {
   const browser = await chromium.launch({
@@ -24,87 +28,94 @@ const { chromium } = require('playwright');
   });
   const page = await context.newPage();
 
-  // ── Step1: トップページをJS描画完了まで待機 ──
-  console.log('\n[Step1] エディオン トップ (JS待機5秒)');
-  await page.goto('https://www.edion.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(5000);
+  // ── Step1: カテゴリ一覧ページ ──
+  console.log(`\n[Step1] カテゴリ一覧: ${CAT_LIST}`);
+  await page.goto(CAT_LIST, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  await page.waitForTimeout(3000);
 
-  // ナビゲーションをクリックして展開を試みる
-  const navBtn = page.locator('[class*="hamburger"], [class*="menu-btn"], [class*="navBtn"], [class*="gnavBtn"]').first();
-  if (await navBtn.isVisible().catch(() => false)) {
-    console.log('  ハンバーガーメニューをクリック');
-    await navBtn.click().catch(() => {});
-    await page.waitForTimeout(2000);
-  }
+  const listInfo = await page.evaluate(() => {
+    const title = document.title;
+    const links = Array.from(document.querySelectorAll('a[href*="c_cd="]'))
+      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 50), href: a.href }))
+      .filter((a, i, arr) => arr.findIndex(b => b.href === a.href) === i)
+      .slice(0, 30);
+    return { title, links, bodyLen: document.body.innerHTML.length };
+  });
+  console.log(`  title: ${listInfo.title}  body長: ${listInfo.bodyLen}`);
+  console.log('  c_cd リンク:');
+  listInfo.links.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
 
-  const topInfo = await page.evaluate(() => {
-    const allLinks = Array.from(document.querySelectorAll('a[href]'))
+  // ── Step2: 冷蔵庫・洗濯機カテゴリページ ──
+  console.log(`\n[Step2] カテゴリページ: ${CAT_URL}`);
+  await page.goto(CAT_URL, { waitUntil: 'load', timeout: 30000 });
+  await page.waitForTimeout(4000);
+  await page.evaluate(() => window.scrollTo(0, 600));
+  await page.waitForTimeout(1500);
+
+  const catInfo = await page.evaluate(() => {
+    const url   = location.href;
+    const title = document.title;
+    const bodyLen = document.body.innerHTML.length;
+
+    // 件数含む要素
+    const countEls = Array.from(document.querySelectorAll('*'))
+      .filter(el => el.children.length === 0 && /[\d,]+(件|点)/.test(el.textContent))
+      .slice(0, 10)
+      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim() }));
+
+    // 商品タイルセレクタ
+    const tileTests = [
+      '[class*="itemList"] li', '[class*="productList"] li',
+      '[class*="list"] li', '[class*="item"] li',
+      '.productItem', '.searchItem', '.resultItem',
+    ].map(sel => ({ sel, count: document.querySelectorAll(sel).length }))
+     .filter(t => t.count > 0);
+
+    // ブランド/メーカー
+    const brandEls = Array.from(document.querySelectorAll(
+      '[class*="maker"], [class*="brand"], [class*="Brand"], [class*="Maker"], [class*="mfr"]'
+    )).filter(el => el.querySelectorAll('a, li').length > 0)
+      .slice(0, 5)
+      .map(el => ({
+        tag: el.tagName, cls: el.className.slice(0, 80),
+        count: el.querySelectorAll('a, li').length,
+        sample: Array.from(el.querySelectorAll('a, li')).slice(0, 5).map(i => i.textContent.trim().slice(0, 20)).join(' | '),
+      }));
+
+    // サブカテゴリ（c_cd 付きリンク）
+    const subCats = Array.from(document.querySelectorAll('a[href*="c_cd="]'))
       .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 40), href: a.href }))
-      .filter(a => a.text && a.href.startsWith('http'));
-
-    // edion.com 内リンクのURLパスパターン
-    const edionLinks = allLinks.filter(a => a.href.includes('edion.com'));
-    const patterns = [...new Set(
-      edionLinks.map(a => { try { const u = new URL(a.href); const p = u.pathname.split('/').filter(Boolean); return p.length ? `/${p[0]}/` : '/'; } catch { return null; } }).filter(Boolean)
-    )];
-
-    // 商品・カテゴリっぽいリンク
-    const catLinks = edionLinks
-      .filter(a => /\/(product|item|list|category|genre|search|kaden|tv|pc|camera)/i.test(a.href))
       .filter((a, i, arr) => arr.findIndex(b => b.href === a.href) === i)
       .slice(0, 20);
 
-    // edion.com の全リンク先頭40件
-    const allEdionLinks = edionLinks
-      .filter((a, i, arr) => arr.findIndex(b => b.href === a.href) === i)
-      .slice(0, 40);
+    // item_list.html リンク
+    const itemListLinks = Array.from(document.querySelectorAll('a[href*="item_list"]'))
+      .map(a => ({ text: a.textContent.trim().slice(0, 40), href: a.href }))
+      .slice(0, 10);
 
-    return { patterns, catLinks, allEdionLinks, totalLinks: allLinks.length };
+    // クラス名ヒント
+    const allClasses = [...new Set(
+      Array.from(document.querySelectorAll('*')).map(el => el.className)
+        .filter(c => typeof c === 'string').join(' ').split(/\s+/)
+    )].filter(c => /maker|brand|count|total|result|filter|item|product|list/i.test(c)).slice(0, 40);
+
+    return { url, title, bodyLen, countEls, tileTests, brandEls, subCats, itemListLinks, allClasses };
   });
 
-  console.log(`  総リンク数: ${topInfo.totalLinks}`);
-  console.log('  URLパターン:', topInfo.patterns.join(', '));
-  console.log('  商品カテゴリ候補:', topInfo.catLinks.length > 0 ? '' : '(なし)');
-  topInfo.catLinks.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
-  console.log('\n  全edionリンク (先頭40件):');
-  topInfo.allEdionLinks.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
-
-  // ── Step2: 直接URLでカテゴリページを試す ──
-  const trialUrls = [
-    'https://www.edion.com/search/result/?category=01',
-    'https://www.edion.com/list/',
-    'https://www.edion.com/item/',
-    'https://www.edion.com/kaden/',
-    'https://www.edion.com/category/',
-  ];
-
-  console.log('\n[Step2] 直接URLでカテゴリページを試行');
-  for (const url of trialUrls) {
-    try {
-      const res = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10000 });
-      const status = res?.status();
-      const title = await page.title();
-      const linkCount = await page.evaluate(() => document.querySelectorAll('a[href]').length);
-      console.log(`  ${url}`);
-      console.log(`    status=${status}  title="${title}"  links=${linkCount}`);
-      if (status === 200 && linkCount > 10) {
-        // このURLが有効そう → 詳細調査
-        await page.waitForTimeout(2000);
-        const info = await page.evaluate(() => {
-          const countEls = Array.from(document.querySelectorAll('*'))
-            .filter(el => el.children.length === 0 && /[\d,]+件/.test(el.textContent))
-            .slice(0, 3).map(el => el.textContent.trim());
-          const sample = Array.from(document.querySelectorAll('a[href]'))
-            .slice(0, 5).map(a => `"${a.textContent.trim().slice(0,20)}" ${a.href}`);
-          return { countEls, sample };
-        });
-        if (info.countEls.length > 0) console.log('    件数:', info.countEls.join(', '));
-        info.sample.forEach(s => console.log('    ', s));
-      }
-    } catch (e) {
-      console.log(`  ${url} → エラー: ${e.message.split('\n')[0]}`);
-    }
-  }
+  console.log(`  title: ${catInfo.title}  body長: ${catInfo.bodyLen}`);
+  console.log('  件数含む要素:');
+  catInfo.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> → "${e.text}"`));
+  console.log('  タイルセレクタ:');
+  catInfo.tileTests.forEach(t => console.log(`    ${t.sel}: ${t.count}`));
+  console.log('  ブランド要素:');
+  catInfo.brandEls.forEach(e =>
+    console.log(`    <${e.tag} class="${e.cls}"> count=${e.count}  sample: ${e.sample}`)
+  );
+  console.log('  サブカテゴリ (c_cd):');
+  catInfo.subCats.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
+  console.log('  item_list リンク:');
+  catInfo.itemListLinks.forEach(l => console.log(`    "${l.text}" => ${l.href}`));
+  console.log('  クラス名ヒント:', catInfo.allClasses.join(', '));
 
   await browser.close();
 })();
