@@ -9,6 +9,22 @@
 
 const SITE = 'yodobashi';
 
+/** 商品タイルセレクタ（マッチしたら件数を返す） */
+function countProductTiles() {
+  for (const sel of [
+    '.srcResultItem',
+    '[class*="productList"] li',
+    '[class*="ProductList"] li',
+    '.js_productListTile',
+    '.p-list_item',
+    '.productItemTile',
+  ]) {
+    const n = document.querySelectorAll(sel).length;
+    if (n > 1) return n; // 1件だけのナビ等を除外
+  }
+  return 0;
+}
+
 async function fetchCategories(page, sleep) {
   await page.goto('https://www.yodobashi.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await sleep(1500, 2000);
@@ -29,43 +45,27 @@ async function fetchCategoryStats(page, category, sleep) {
   try {
     // ── 商品数: ?word= 付きURLで全商品一覧 ──
     const listUrl = category.url.replace(/\/?$/, '/') + '?word=';
+    console.log(`      → ${listUrl}`);
     const res = await page.goto(listUrl, { waitUntil: 'load', timeout: 30000 });
     if (!res || res.status() !== 200) return null;
-    await sleep(2500, 3500); // AJAX描画待ち（itemCountはAJAX遅延）
 
-    // スクロールで遅延読み込みを促し、先頭に戻る
+    await sleep(2500, 3500); // AJAX描画待ち
     await page.evaluate(() => window.scrollTo(0, 600));
     await sleep(1500, 2000);
     await page.evaluate(() => window.scrollTo(0, 0));
     await sleep(800, 1200);
 
-    const productCount = await page.evaluate(() => {
-      // itemCount（AJAX後に件数が入る）
-      const itemCountEl = document.querySelector('.itemCount');
-      if (itemCountEl) {
-        const m = itemCountEl.textContent.match(/[\d,]+/);
-        if (m) {
-          const n = parseInt(m[0].replace(/,/g, ''), 10);
-          if (n > 0) return n;
-        }
-      }
+    let productCount = await page.evaluate(countProductTiles);
 
-      // 商品タイルを直接カウント（debug v5 の確認済みセレクタ一覧）
-      for (const sel of [
-        '.js_productListTile',
-        '.p-list_item',
-        '.productItemTile',
-        '.srcResultItem',
-        '[class*="productList"] li',
-        '[class*="ProductList"] li',
-        '[class*="itemList"] li',
-        '[class*="listItem"]',
-      ]) {
-        const items = document.querySelectorAll(sel);
-        if (items.length > 0) return items.length;
-      }
-      return null;
-    });
+    // ?word= でヒットしない場合はカテゴリURLをそのまま試す
+    if (!productCount) {
+      console.log(`      → フォールバック: ${category.url}`);
+      await page.goto(category.url, { waitUntil: 'load', timeout: 30000 });
+      await sleep(2500, 3500);
+      await page.evaluate(() => window.scrollTo(0, 600));
+      await sleep(1500, 2000);
+      productCount = await page.evaluate(countProductTiles) || null;
+    }
 
     // ── ブランド数: /maker/ ページ ──
     const makerUrl = category.url.replace(/\/?$/, '/') + 'maker/';
@@ -76,7 +76,6 @@ async function fetchCategoryStats(page, category, sleep) {
     await sleep(1000, 1500);
 
     const brandCount = await page.evaluate(() => {
-      // 確認済み: /m数字 パターンのリンクがブランドリンク
       const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
         .filter(a => /\/m\d/.test(a.href));
       return links.length || null;
@@ -95,7 +94,7 @@ async function scrape(page, sleep) {
 
   const results = [];
   for (const cat of categories) {
-    console.log(`  [ヨドバシ] ${cat.name}`);
+    console.log(`  [ヨドバシ] ${cat.name}  (${cat.url})`);
     const stats = await fetchCategoryStats(page, cat, sleep);
     results.push({
       site: SITE,
