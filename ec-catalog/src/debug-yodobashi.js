@@ -1,12 +1,11 @@
 /**
- * ヨドバシカメラ サイト構造調査 v7
+ * ヨドバシカメラ サイト構造調査 v8
  * npm run debug:yodobashi
  *
- * 目的: subCateUnit/cateNavExposedAreaの中身・?word=の総件数を確認
+ * 目的: 商品一覧ページのサイドバーに「ブランド名(件数)」リストがあるか確認
  */
 const { chromium } = require('playwright');
 
-const KADEN_URL      = 'https://www.yodobashi.com/category/6353/';
 const KADEN_WORD_URL = 'https://www.yodobashi.com/category/6353/?word=';
 
 (async () => {
@@ -22,122 +21,81 @@ const KADEN_WORD_URL = 'https://www.yodobashi.com/category/6353/?word=';
   await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); window.chrome = { runtime: {} }; });
   const page = await context.newPage();
 
-  // ── 1. カテゴリページ（?wordなし）: ナビ構造 ──
-  console.log(`\n====== [1] カテゴリページ: ${KADEN_URL} ======`);
-  await page.goto(KADEN_URL, { waitUntil: 'load', timeout: 30000 });
-  await page.waitForTimeout(8000); // AJAX完全待ち
-  await page.evaluate(() => window.scrollTo(0, 800));
+  console.log(`\n====== ?word= ページ: ${KADEN_WORD_URL} ======`);
+  await page.goto(KADEN_WORD_URL, { waitUntil: 'load', timeout: 30000 });
+  await page.waitForTimeout(6000);
+  await page.evaluate(() => window.scrollTo(0, 600));
   await page.waitForTimeout(2000);
 
-  const navInfo = await page.evaluate(() => {
-    // subCateUnit / subCateNavNew / cateListBlock の中身を確認
-    const navClasses = ['subCateUnit', 'subCateNavNew', 'cateListBlock', 'cateNavExposedArea', 'subCateWrap'];
-    const navSamples = navClasses.map(cls => {
-      const el = document.querySelector(`.${cls}`);
-      if (!el) return { cls, found: false };
-      const links = Array.from(el.querySelectorAll('a')).slice(0, 8)
-        .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' ').slice(0, 40), href: a.href.slice(30, 80) }));
-      const innerText = el.innerText?.replace(/\s+/g, ' ').trim().slice(0, 200) || '';
-      return { cls, found: true, linkCount: el.querySelectorAll('a').length, innerText, links };
-    });
-
-    // 数字を含む全テキスト要素（広め）
-    const numEls = Array.from(document.querySelectorAll('*'))
-      .filter(el => el.children.length === 0 && /\d{2,}/.test(el.textContent) && el.textContent.trim().length < 30)
-      .filter(el => !/script|style/i.test(el.tagName))
+  const info = await page.evaluate(() => {
+    // 1. 「ブランド名(数字)」パターンを含むリスト要素を探す
+    const lisWithCount = Array.from(document.querySelectorAll('li, a, label, span'))
+      .filter(el => /^.{1,30}\(\d+\)$/.test(el.textContent.trim()))
       .filter(el => !el.closest('script, style, noscript'))
-      .slice(0, 20)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim() }));
+      .slice(0, 30)
+      .map(el => ({
+        tag: el.tagName,
+        cls: el.className?.slice(0, 60) ?? '',
+        parentCls: el.parentElement?.className?.slice(0, 60) ?? '',
+        grandCls:  el.parentElement?.parentElement?.className?.slice(0, 60) ?? '',
+        text: el.textContent.trim(),
+      }));
 
-    // aタグのテキストにある数字（サブカテゴリ件数の候補）
-    const linksWithNum = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-      .filter(a => /\d{2,}/.test(a.textContent) && a.textContent.trim().length < 50 && !/http/.test(a.textContent))
-      .slice(0, 15)
-      .map(a => ({ text: a.textContent.trim().replace(/\s+/g, ' '), href: a.href.slice(30, 80) }));
-
-    return { navSamples, numEls, linksWithNum };
-  });
-
-  navInfo.navSamples.forEach(s => {
-    if (!s.found) { console.log(`  .${s.cls}: 見つからず`); return; }
-    console.log(`  .${s.cls}: links=${s.linkCount}`);
-    console.log(`    innerText: "${s.innerText}"`);
-    s.links.forEach(l => console.log(`      "${l.text}"  ...${l.href}`));
-  });
-  console.log('\n  数字含む要素:');
-  navInfo.numEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-  console.log('\n  カテゴリリンク（数字含む）:');
-  navInfo.linksWithNum.forEach(l => console.log(`    "${l.text}"  ...${l.href}`));
-
-  // ── 2. ?word= ページ: 総件数テキストを探す ──
-  console.log(`\n====== [2] ?word= ページ: ${KADEN_WORD_URL} ======`);
-  await page.goto(KADEN_WORD_URL, { waitUntil: 'load', timeout: 30000 });
-  await page.waitForTimeout(5000);
-
-  const wordInfo = await page.evaluate(() => {
-    // 短い要素の「件」含むテキスト（children問わず）
-    const countCandidates = Array.from(document.querySelectorAll('*'))
+    // 2. (数字) パターンを多く含む親要素を探す（リスト全体）
+    const containers = Array.from(document.querySelectorAll('ul, ol, div, section'))
       .filter(el => {
-        const t = el.textContent.trim();
-        return t.length < 60 && /[\d,]+(件|個|点)/.test(t);
+        const t = el.textContent;
+        const matches = t.match(/\(\d+\)/g);
+        return matches && matches.length >= 3 && el.children.length >= 3;
       })
-      .filter(el => !/script|style/i.test(el.tagName))
-      .slice(0, 15)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60) }));
+      .filter(el => !el.closest('script, style'))
+      .map(el => ({
+        tag: el.tagName,
+        id:  (el.id || '').slice(0, 40),
+        cls: el.className?.slice(0, 80) ?? '',
+        matchCount: (el.textContent.match(/\(\d+\)/g) || []).length,
+        childCount: el.children.length,
+        sample: el.innerText?.replace(/\s+/g, ' ').trim().slice(0, 200) ?? '',
+      }))
+      .sort((a, b) => b.matchCount - a.matchCount)
+      .slice(0, 8);
 
-    // ページ内のすべての「数字 件」パターン
-    const bodyText = document.body?.innerText || '';
-    const countMatches = [...bodyText.matchAll(/[\d,]+件/g)].map(m => m[0]).slice(0, 10);
+    // 3. 「メーカー」「ブランド」見出し付近の要素
+    const headings = Array.from(document.querySelectorAll('*'))
+      .filter(el => el.children.length === 0 && /メーカー|ブランド|maker|brand/i.test(el.textContent) && el.textContent.trim().length < 20)
+      .slice(0, 5)
+      .map(el => {
+        const section = el.closest('section, div[class], aside') || el.parentElement?.parentElement;
+        return {
+          headingText: el.textContent.trim(),
+          sectionCls: section?.className?.slice(0, 80) ?? '',
+          sectionSample: section?.innerText?.replace(/\s+/g, ' ').trim().slice(0, 200) ?? '',
+        };
+      });
 
-    return { countCandidates, countMatches };
+    // 4. h2.numOfSearch確認
+    const numOfSearch = document.querySelector('h2.numOfSearch');
+    const totalCount = numOfSearch?.textContent.trim() ?? '(なし)';
+
+    return { lisWithCount, containers, headings, totalCount };
   });
 
-  console.log('  件数含む要素:');
-  wordInfo.countCandidates.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-  console.log('  本文中の件数パターン:', wordInfo.countMatches.join(' / ') || '(なし)');
+  console.log(`\n  総商品数: ${info.totalCount}`);
 
-  // ── 3. /maker/ ページ: ブランド数上限の原因調査 ──
-  const MAKER_URL = 'https://www.yodobashi.com/category/6353/maker/';
-  console.log(`\n====== [3] /maker/ ページ: ${MAKER_URL} ======`);
-  await page.goto(MAKER_URL, { waitUntil: 'load', timeout: 30000 });
-  await page.waitForTimeout(3000);
+  console.log(`\n  「ブランド名(数字)」パターンのli/a要素 (${info.lisWithCount.length}件):`);
+  info.lisWithCount.slice(0, 15).forEach(e =>
+    console.log(`    <${e.tag} class="${e.cls}"> parent="${e.parentCls}" grand="${e.grandCls}" → "${e.text}"`)
+  );
 
-  const makerInfo = await page.evaluate(() => {
-    // ブランドリンク数
-    const makerLinks = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-      .filter(a => /\/m\d/.test(a.href));
+  console.log(`\n  (数字)を3個以上含む親コンテナ:`);
+  info.containers.forEach(c =>
+    console.log(`    <${c.tag} id="${c.id}" class="${c.cls}"> matches=${c.matchCount} children=${c.childCount}\n      sample: "${c.sample}"`)
+  );
 
-    // 「件」含む要素（総ブランド数）
-    const countEls = Array.from(document.querySelectorAll('*'))
-      .filter(el => {
-        const t = el.textContent.trim();
-        return t.length < 80 && /[\d,]+(件|ブランド|メーカー)/.test(t);
-      })
-      .slice(0, 8)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 60) }));
-
-    // ページネーション（総ページ数）
-    const pagerEls = Array.from(document.querySelectorAll('[class*="pager"], [class*="page"], [class*="navi"]'))
-      .filter(el => /\d/.test(el.textContent)).slice(0, 3)
-      .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 100) }));
-
-    // h2.numOfSearch（商品数ページと同じ総件数要素があるか）
-    const numOfSearch = document.querySelector('h2.numOfSearch, .searchResultsHead');
-    const numText = numOfSearch?.textContent.trim() || '(なし)';
-
-    // サンプルブランド名
-    const sample = makerLinks.slice(0, 8).map(a => a.textContent.trim().slice(0, 20));
-
-    return { makerLinkCount: makerLinks.length, countEls, pagerEls, numText, sample };
-  });
-
-  console.log(`  /m数字 リンク数: ${makerInfo.makerLinkCount}`);
-  console.log(`  h2.numOfSearch: ${makerInfo.numText}`);
-  console.log('  件数含む要素:');
-  makerInfo.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
-  console.log('  ページネーション:');
-  makerInfo.pagerEls.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
-  console.log('  ブランドサンプル:', makerInfo.sample.join(' / '));
+  console.log(`\n  「メーカー/ブランド」見出し周辺:`);
+  info.headings.forEach(h =>
+    console.log(`    "${h.headingText}" → section class="${h.sectionCls}"\n      sample: "${h.sectionSample}"`)
+  );
 
   await browser.close();
 })();

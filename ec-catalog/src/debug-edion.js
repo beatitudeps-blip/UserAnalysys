@@ -1,8 +1,8 @@
 /**
- * エディオン サイト構造調査 v4
+ * エディオン サイト構造調査 v5
  * npm run debug:edion
  *
- * 目的: item_list.html（葉カテゴリ）の商品数・ブランド確認
+ * 目的: ul.maker li のテキスト形式確認 + ブランド名(件数)リストの構造調査
  */
 const { chromium } = require('playwright');
 
@@ -32,67 +32,67 @@ const URLS = {
     await page.waitForTimeout(1500);
 
     const info = await page.evaluate(() => {
-      const url   = location.href;
-      const title = document.title;
+      // 1. ul.maker li の全テキスト（件数が入っているか確認）
+      const makerLis = Array.from(document.querySelectorAll('ul.maker li'));
+      const makerSamples = makerLis.slice(0, 20).map(li => ({
+        text: li.textContent.trim().replace(/\s+/g, ' '),
+        aText: li.querySelector('a')?.textContent.trim() ?? '',
+        spanTexts: Array.from(li.querySelectorAll('span')).map(s => s.textContent.trim()),
+      }));
 
-      // 1. 件数含む要素（「件」「点」「商品」）
-      const countEls = Array.from(document.querySelectorAll('*'))
-        .filter(el => el.children.length === 0 && /[\d,]+(件|点|商品|結果)/.test(el.textContent))
-        .slice(0, 10)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim() }));
-
-      // 2. 価格持つliをカウント（商品タイル）
-      const allLi = Array.from(document.querySelectorAll('li'));
-      const liWithPrice = allLi.filter(li => /[\d,]+円/.test(li.textContent));
-
-      // 3. 商品タイルクラス特定
-      const priceTags = Array.from(document.querySelectorAll('*'))
-        .filter(el => el.children.length === 0 && /[\d,]+円/.test(el.textContent));
-      const tileClasses = [...new Set(
-        priceTags.map(el => { let p = el.parentElement; for (let i = 0; i < 6; i++) { if (p?.tagName === 'LI') return p.className.slice(0, 60); p = p?.parentElement; } return null; }).filter(Boolean)
-      )];
-
-      // 4. ブランド/メーカー要素（より広く）
-      const brandEls = Array.from(document.querySelectorAll('[class*="maker"], [class*="brand"], [class*="Brand"], [class*="mfr"], [class*="Maker"], [id*="maker"], [id*="brand"]'))
-        .filter(el => el.querySelectorAll('a, li, label, input').length > 0)
-        .slice(0, 5)
+      // 2. 「ブランド名(数字)」パターンを含む要素
+      const lisWithCount = Array.from(document.querySelectorAll('li, a, label'))
+        .filter(el => /^.{1,30}\(\d+\)$/.test(el.textContent.trim()))
+        .filter(el => !el.closest('script, style'))
+        .slice(0, 20)
         .map(el => ({
-          tag: el.tagName, id: (el.id || '').slice(0, 40), cls: el.className.slice(0, 80),
-          childCount: el.querySelectorAll('a, li, label').length,
-          sample: Array.from(el.querySelectorAll('a, li, label')).slice(0, 5).map(i => i.textContent.trim().slice(0, 20)).join(' | '),
+          tag: el.tagName,
+          cls: el.className?.slice(0, 60) ?? '',
+          parentCls: el.parentElement?.className?.slice(0, 60) ?? '',
+          text: el.textContent.trim(),
         }));
 
-      // 5. 絞り込みエリア
-      const filterEls = Array.from(document.querySelectorAll('[class*="filter"], [class*="Filter"], [class*="narrow"], [class*="refine"], [class*="search"] ul'))
-        .filter(el => el.querySelectorAll('a, li').length > 2)
-        .slice(0, 3)
-        .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), count: el.querySelectorAll('a, li').length, sample: el.textContent.trim().slice(0, 100).replace(/\s+/g, ' ') }));
+      // 3. (数字)を3個以上含む親コンテナ
+      const containers = Array.from(document.querySelectorAll('ul, ol, div'))
+        .filter(el => {
+          const matches = el.textContent.match(/\(\d+\)/g);
+          return matches && matches.length >= 3 && el.children.length >= 3;
+        })
+        .filter(el => !el.closest('script, style'))
+        .map(el => ({
+          tag: el.tagName,
+          id:  (el.id || '').slice(0, 40),
+          cls: el.className?.slice(0, 80) ?? '',
+          matchCount: (el.textContent.match(/\(\d+\)/g) || []).length,
+          childCount: el.children.length,
+          sample: el.innerText?.replace(/\s+/g, ' ').trim().slice(0, 200) ?? '',
+        }))
+        .sort((a, b) => b.matchCount - a.matchCount)
+        .slice(0, 6);
 
-      // 6. ページネーション
-      const pagerEls = Array.from(document.querySelectorAll('[class*="page"], [class*="pager"], [class*="navi"]'))
-        .filter(el => /\d/.test(el.textContent)).slice(0, 3)
-        .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 100) }));
+      // 4. 商品数
+      const titleEl = document.querySelector('p.title');
+      const totalCount = titleEl?.textContent.trim() ?? '(なし)';
 
-      // 7. 全クラス名ヒント
-      const allClasses = [...new Set(
-        Array.from(document.querySelectorAll('*')).map(el => el.className)
-          .filter(c => typeof c === 'string').join(' ').split(/\s+/)
-      )].filter(c => /maker|brand|count|total|result|filter|item|product|list|search/i.test(c)).slice(0, 40);
-
-      return { url, title, countEls, liWithPriceCount: liWithPrice.length, tileClasses, brandEls, filterEls, pagerEls, allClasses };
+      return { makerSamples, makerLiCount: makerLis.length, lisWithCount, containers, totalCount };
     });
 
-    console.log(`  title: ${info.title}`);
-    console.log('  件数含む要素:');
-    info.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> → "${e.text}"`));
-    console.log(`  価格ありli数: ${info.liWithPriceCount}  タイルLIクラス: ${info.tileClasses.join(', ') || '(なし)'}`);
-    console.log('  ブランド/メーカー要素:');
-    info.brandEls.forEach(e => console.log(`    <${e.tag} id="${e.id}" class="${e.cls}"> count=${e.childCount}  sample: ${e.sample}`));
-    console.log('  フィルタ要素:');
-    info.filterEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> count=${e.count}  "${e.sample}"`));
-    console.log('  ページネーション:');
-    info.pagerEls.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
-    console.log('  クラス名ヒント:', info.allClasses.join(', '));
+    console.log(`  総商品数テキスト: "${info.totalCount}"`);
+    console.log(`\n  ul.maker li 数: ${info.makerLiCount}`);
+    console.log('  ul.maker li サンプル（最大20件）:');
+    info.makerSamples.forEach(s =>
+      console.log(`    text="${s.text}"  a="${s.aText}"  spans=[${s.spanTexts.join(', ')}]`)
+    );
+
+    console.log(`\n  「ブランド名(数字)」パターン要素 (${info.lisWithCount.length}件):`);
+    info.lisWithCount.slice(0, 10).forEach(e =>
+      console.log(`    <${e.tag} class="${e.cls}"> parent="${e.parentCls}" → "${e.text}"`)
+    );
+
+    console.log(`\n  (数字)を3個以上含む親コンテナ:`);
+    info.containers.forEach(c =>
+      console.log(`    <${c.tag} id="${c.id}" class="${c.cls}"> matches=${c.matchCount} children=${c.childCount}\n      sample: "${c.sample}"`)
+    );
   }
 
   await browser.close();
