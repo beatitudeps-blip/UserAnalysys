@@ -1,71 +1,48 @@
 /**
  * ヨドバシカメラ カテゴリ別ブランド数・商品数スクレイパー
  *
- * 確認済み構造:
- *   カテゴリURL : https://www.yodobashi.com/category/{id}/
- *   商品一覧    : {catUrl}?word= → [class*="productList"] li または .srcResultItem
- *   ブランド一覧: {catUrl}maker/ → a[href*="/m数字"]
+ * 確定セレクタ (debug-yodobashi.js v7 調査済み):
+ *   カテゴリ一覧: .cateNavExposedArea a[href*="/category/"] (トップ8カテゴリ)
+ *   商品数      : {catUrl}?word= → h2.numOfSearch "XXX件ヒット"
+ *   ブランド数  : {catUrl}maker/ → a[href*="/m数字"]
  */
 
 const SITE = 'yodobashi';
-
-/** 商品タイルセレクタ（マッチしたら件数を返す） */
-function countProductTiles() {
-  for (const sel of [
-    '.srcResultItem',
-    '[class*="productList"] li',
-    '[class*="ProductList"] li',
-    '.js_productListTile',
-    '.p-list_item',
-    '.productItemTile',
-  ]) {
-    const n = document.querySelectorAll(sel).length;
-    if (n > 1) return n; // 1件だけのナビ等を除外
-  }
-  return 0;
-}
 
 async function fetchCategories(page, sleep) {
   await page.goto('https://www.yodobashi.com/', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await sleep(1500, 2000);
 
   return page.evaluate(() => {
-    const cats = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+    // .cateNavExposedArea に並ぶトップレベルカテゴリのみ取得
+    const seen = new Set();
+    return Array.from(document.querySelectorAll('.cateNavExposedArea a[href*="/category/"]'))
       .map(a => ({
         name: a.textContent.trim().replace(/\s+/g, ' '),
         url:  a.href.split('?')[0].replace(/\/?$/, '/'),
       }))
-      .filter(c => c.name.length > 0)
-      .filter((c, i, arr) => arr.findIndex(b => b.url === c.url) === i);
-    return cats;
+      .filter(c => c.name.length > 0 && !seen.has(c.url) && seen.add(c.url));
   });
 }
 
 async function fetchCategoryStats(page, category, sleep) {
   try {
-    // ── 商品数: ?word= 付きURLで全商品一覧 ──
+    // ── 商品数: {catUrl}?word= → h2.numOfSearch "XXX件ヒット" ──
     const listUrl = category.url.replace(/\/?$/, '/') + '?word=';
-    console.log(`      → ${listUrl}`);
     const res = await page.goto(listUrl, { waitUntil: 'load', timeout: 30000 });
     if (!res || res.status() !== 200) return null;
+    await sleep(2000, 3000);
 
-    await sleep(2500, 3500); // AJAX描画待ち
-    await page.evaluate(() => window.scrollTo(0, 600));
-    await sleep(1500, 2000);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await sleep(800, 1200);
-
-    let productCount = await page.evaluate(countProductTiles);
-
-    // ?word= でヒットしない場合はカテゴリURLをそのまま試す
-    if (!productCount) {
-      console.log(`      → フォールバック: ${category.url}`);
-      await page.goto(category.url, { waitUntil: 'load', timeout: 30000 });
-      await sleep(2500, 3500);
-      await page.evaluate(() => window.scrollTo(0, 600));
-      await sleep(1500, 2000);
-      productCount = await page.evaluate(countProductTiles) || null;
-    }
+    const productCount = await page.evaluate(() => {
+      // 確定: h2.numOfSearch "家電"で70486件ヒット
+      for (const sel of ['h2.numOfSearch', '.searchResultsHead', '.srcResultBoxNew_info']) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        const m = el.textContent.match(/([\d,]+)件[ヒ中]/);
+        if (m) return parseInt(m[1].replace(/,/g, ''), 10);
+      }
+      return null;
+    });
 
     // ── ブランド数: /maker/ ページ ──
     const makerUrl = category.url.replace(/\/?$/, '/') + 'maker/';
@@ -94,7 +71,7 @@ async function scrape(page, sleep) {
 
   const results = [];
   for (const cat of categories) {
-    console.log(`  [ヨドバシ] ${cat.name}  (${cat.url})`);
+    console.log(`  [ヨドバシ] ${cat.name}`);
     const stats = await fetchCategoryStats(page, cat, sleep);
     results.push({
       site: SITE,
