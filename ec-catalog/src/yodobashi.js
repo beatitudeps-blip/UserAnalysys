@@ -4,7 +4,7 @@
  * 確定セレクタ (debug-yodobashi.js v7 調査済み):
  *   カテゴリ一覧: .cateNavExposedArea a[href*="/category/"] (トップ8カテゴリ)
  *   商品数      : {catUrl}?word= → h2.numOfSearch "XXX件ヒット"
- *   ブランド数  : {catUrl}maker/ → a[href*="/m数字"]
+ *   ブランド一覧: {catUrl}maker/ → a[href*="/m数字"] を全ページ巡回
  */
 
 const SITE = 'yodobashi';
@@ -14,7 +14,6 @@ async function fetchCategories(page, sleep) {
   await sleep(1500, 2000);
 
   return page.evaluate(() => {
-    // .cateNavExposedArea に並ぶトップレベルカテゴリのみ取得
     const seen = new Set();
     return Array.from(document.querySelectorAll('.cateNavExposedArea a[href*="/category/"]'))
       .map(a => ({
@@ -23,6 +22,39 @@ async function fetchCategories(page, sleep) {
       }))
       .filter(c => c.name.length > 0 && !seen.has(c.url) && seen.add(c.url));
   });
+}
+
+// /maker/ を全ページ巡回してブランド名一覧を返す
+async function fetchAllBrands(page, makerUrl, sleep, catName) {
+  const brands = [];
+  let currentUrl = makerUrl;
+  let pageNum = 0;
+
+  while (currentUrl) {
+    pageNum++;
+    const res = await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (!res || res.status() !== 200) break;
+    await sleep(800, 1200);
+
+    const { items, nextHref, totalPages } = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+        .filter(a => /\/m\d/.test(a.href));
+      const items = links.map(a => ({
+        name: a.textContent.trim().replace(/\s+/g, ' '),
+        productCount: null,
+      }));
+      const nextEl = Array.from(document.querySelectorAll('a')).find(a => /次の\d+件/.test(a.textContent));
+      const bodyText = document.body?.innerText || '';
+      const pm = bodyText.match(/\d+\s*\/\s*(\d+)/);
+      return { items, nextHref: nextEl?.href ?? null, totalPages: pm ? parseInt(pm[1], 10) : 1 };
+    });
+
+    brands.push(...items);
+    if (pageNum === 1) console.log(`    ブランドページ巡回中 (全${totalPages}ページ)...`);
+    currentUrl = nextHref;
+  }
+
+  return brands;
 }
 
 async function fetchCategoryStats(page, category, sleep) {
@@ -34,7 +66,6 @@ async function fetchCategoryStats(page, category, sleep) {
     await sleep(2000, 3000);
 
     const productCount = await page.evaluate(() => {
-      // 確定: h2.numOfSearch "家電"で70486件ヒット
       for (const sel of ['h2.numOfSearch', '.searchResultsHead', '.srcResultBoxNew_info']) {
         const el = document.querySelector(sel);
         if (!el) continue;
@@ -44,31 +75,15 @@ async function fetchCategoryStats(page, category, sleep) {
       return null;
     });
 
-    // ── ブランド数: /maker/ ページ ──
+    // ── ブランド一覧: /maker/ を全ページ巡回 ──
     const makerUrl = category.url.replace(/\/?$/, '/') + 'maker/';
     const makerRes = await page.goto(makerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
     if (!makerRes || makerRes.status() !== 200) {
-      return { productCount, brandCount: null };
+      return { productCount, brandCount: null, brands: [] };
     }
-    await sleep(1000, 1500);
 
-    const brandCount = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-        .filter(a => /\/m\d/.test(a.href));
-      const perPage = links.length;
-      if (!perPage) return null;
-
-      // ページネーション "N / 23" を探して総ページ数を取得
-      const bodyText = document.body?.innerText || '';
-      const m = bodyText.match(/\d+\s*\/\s*(\d+)/);
-      if (m) {
-        const totalPages = parseInt(m[1], 10);
-        return totalPages * perPage;
-      }
-      return perPage;
-    });
-
-    return { productCount, brandCount };
+    const brands = await fetchAllBrands(page, makerUrl, sleep, category.name);
+    return { productCount, brandCount: brands.length || null, brands };
   } catch (e) {
     return null;
   }
@@ -89,6 +104,7 @@ async function scrape(page, sleep) {
       url: cat.url,
       brandCount:   stats?.brandCount   ?? null,
       productCount: stats?.productCount ?? null,
+      brands:       stats?.brands       ?? [],
     });
     console.log(`    ブランド数: ${stats?.brandCount ?? '-'}  商品数: ${stats?.productCount ?? '-'}`);
     await sleep(1500, 2500);
