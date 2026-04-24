@@ -1,142 +1,94 @@
 /**
- * ヨドバシカメラ サイト構造調査 v5
+ * ヨドバシカメラ サイト構造調査 v6
  * npm run debug:yodobashi
  *
- * 確認ポイント:
- *   - 商品数の取得方法（AJAX待機・スクロール・ページネーション）
- *   - ブランド数は /maker/ ページで確定済み
+ * 目的: 親カテゴリページのサブカテゴリ (数字) 構造を確認
  */
 const { chromium } = require('playwright');
 
-// エアコン: 一覧URLと全商品URL
-const AIRCON_URL       = 'https://www.yodobashi.com/category/6353/38073/?word=';
-const AIRCON_MAKER_URL = 'https://www.yodobashi.com/category/6353/38073/maker/';
+const CATEGORY_URL = 'https://www.yodobashi.com/category/6353/'; // 家電
 
 (async () => {
-  const browser = await chromium.launch({ headless: false, args: ['--disable-blink-features=AutomationControlled'] });
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    locale: 'ja-JP', ignoreHTTPSErrors: true, viewport: { width: 1280, height: 900 },
+  const browser = await chromium.launch({
+    headless: false,
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
   });
+  const context = await browser.newContext({
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    locale: 'ja-JP', timezoneId: 'Asia/Tokyo', ignoreHTTPSErrors: true, viewport: { width: 1280, height: 900 },
+  });
+  await context.addInitScript(() => { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); window.chrome = { runtime: {} }; });
   const page = await context.newPage();
 
-  // ── 1. 商品一覧ページ（?word=付き）──
-  console.log(`\n[1] 商品一覧ページ: ${AIRCON_URL}`);
-  await page.goto(AIRCON_URL, { waitUntil: 'load', timeout: 30000 });
+  console.log(`\n====== 家電カテゴリページ: ${CATEGORY_URL} ======`);
+  await page.goto(CATEGORY_URL, { waitUntil: 'load', timeout: 30000 });
   await page.waitForTimeout(3000);
-
-  // スクロールで遅延読み込みを促す
   await page.evaluate(() => window.scrollTo(0, 600));
-  await page.waitForTimeout(2000);
-  await page.evaluate(() => window.scrollTo(0, 0));
-  await page.waitForTimeout(1000);
+  await page.waitForTimeout(1500);
 
-  const listInfo = await page.evaluate(() => {
-    // 商品タイル数（レンダリング済みの商品数）
-    const tileSelectors = [
-      '.js_productListTile',
-      '.p-list_item',
-      '.productItemTile',
-      '[class*="productList"] li',
-      '[class*="ProductList"] li',
-      '[class*="itemList"] li',
-      '[class*="listItem"]',
-    ];
+  const info = await page.evaluate(() => {
+    // 1. "(数字)" パターンを持つ要素を広く収集（サブカテゴリ件数候補）
+    const parenCountEls = Array.from(document.querySelectorAll('*'))
+      .filter(el => el.children.length === 0 && /\([\d,]{2,}\)/.test(el.textContent))
+      .slice(0, 20)
+      .map(el => ({
+        tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim().slice(0, 60),
+        parentTag: el.parentElement?.tagName, parentCls: el.parentElement?.className.slice(0, 60),
+      }));
+
+    // 2. カテゴリリンクの隣に "(数字)" があるパターンを探す
+    //    → aタグのtextContentに (数字) が含まれるもの
+    const linksWithCount = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+      .filter(a => /\([\d,]+\)/.test(a.textContent) && a.textContent.trim().length < 60)
+      .slice(0, 15)
+      .map(a => ({ href: a.href.slice(0, 80), text: a.textContent.trim().replace(/\s+/g, ' ') }));
+
+    // 3. "全XX件" 型の総件数テキスト
+    const totalCountEls = Array.from(document.querySelectorAll('*'))
+      .filter(el => {
+        const t = el.textContent.trim();
+        return t.length < 60 && /全[\d,]+件|[\d,]+件[中ヒット]/.test(t);
+      })
+      .slice(0, 5)
+      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim() }));
+
+    // 4. カテゴリナビのクラスヒント
+    const navClasses = [...new Set(
+      Array.from(document.querySelectorAll('[class*="category"], [class*="Category"], [class*="subCat"], [class*="nav"], [class*="Nav"]'))
+        .map(el => el.className).filter(c => typeof c === 'string').join(' ').split(/\s+/)
+    )].filter(c => /cat|nav|sub|count|list|item/i.test(c)).slice(0, 40);
+
+    // 5. aタグのテキストに数字が含まれるカテゴリナビ（サンプル）
+    const catNavLinks = Array.from(document.querySelectorAll('[class*="subCate"] a, [class*="subCategory"] a, [class*="categoryList"] a, [class*="cateList"] a'))
+      .slice(0, 10)
+      .map(a => ({ cls: a.className.slice(0, 40), text: a.textContent.trim().slice(0, 50), href: a.href.slice(30, 80) }));
+
+    // 6. 現在ページの商品タイル数（比較用）
     let tileCount = 0;
-    let tileClass = '';
-    for (const sel of tileSelectors) {
-      const items = document.querySelectorAll(sel);
-      if (items.length > 0) { tileCount = items.length; tileClass = sel; break; }
+    for (const sel of ['.srcResultItem', '[class*="productList"] li', '.js_productListTile']) {
+      const n = document.querySelectorAll(sel).length;
+      if (n > 1) { tileCount = n; break; }
     }
 
-    // itemCount（AJAX後）
-    const itemCountEl = document.querySelector('.itemCount');
-
-    // 「件」を含む全テキスト
-    const countEls = Array.from(document.querySelectorAll('*'))
-      .filter(el => el.children.length === 0 && /[\d,]+件/.test(el.textContent))
-      .slice(0, 8)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 80), text: el.textContent.trim() }));
-
-    // ページネーション（総ページ数 or 総件数）
-    const pagerEls = Array.from(document.querySelectorAll(
-      '[class*="pager"], [class*="Pager"], [class*="pagination"], [class*="Pagination"], [class*="page"]'
-    )).filter(el => /\d/.test(el.textContent))
-      .slice(0, 5)
-      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 80) }));
-
-    // XHR で取得される itemCount の値を window 変数から探す
-    const windowKeys = Object.keys(window).filter(k =>
-      /count|product|item|total/i.test(k) && typeof window[k] === 'number' && window[k] > 10
-    ).slice(0, 10);
-
-    // ページ全体のクラス名からヒントを探す
-    const productClasses = [...new Set(
-      Array.from(document.querySelectorAll('*')).map(el => el.className)
-        .filter(c => typeof c === 'string').join(' ').split(/\s+/)
-    )].filter(c => /product|Product|item|Item|list|List|tile|Tile/.test(c)).slice(0, 20);
-
-    return {
-      itemCountText: itemCountEl?.textContent?.trim() ?? '(なし)',
-      tileCount, tileClass,
-      countEls,
-      pagerEls,
-      windowKeys,
-      productClasses,
-    };
+    return { parenCountEls, linksWithCount, totalCountEls, navClasses, catNavLinks, tileCount };
   });
 
-  console.log(`  itemCount     : ${listInfo.itemCountText}`);
-  console.log(`  商品タイル数  : ${listInfo.tileCount} (${listInfo.tileClass})`);
-  console.log(`  件数含む要素  :`);
-  listInfo.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> → "${e.text}"`));
-  console.log(`  ページネーション要素:`);
-  listInfo.pagerEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> → "${e.text}"`));
-  console.log(`  window数値変数: ${listInfo.windowKeys.join(', ') || '(なし)'}`);
-  console.log(`  商品関連クラス: ${listInfo.productClasses.join(', ')}`);
+  console.log('  "(数字)" パターン要素:');
+  info.parenCountEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"  (parent: <${e.parentTag} class="${e.parentCls}">)`));
 
-  // ── 2. /maker/ ページ（確認済み手法）──
-  console.log(`\n[2] メーカー一覧ページ: ${AIRCON_MAKER_URL}`);
-  await page.goto(AIRCON_MAKER_URL, { waitUntil: 'load', timeout: 30000 });
-  await page.waitForTimeout(2000);
+  console.log('\n  カテゴリリンク内の (数字):');
+  info.linksWithCount.forEach(l => console.log(`    ${l.href}  "${l.text}"`));
 
-  const makerInfo = await page.evaluate(() => {
-    // /maker/ ページのブランドリンク
-    const makerLinks = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-      .filter(a => /\/m\d/.test(a.href))
-      .map(a => a.textContent.trim().replace(/\s+/g, ' '))
-      .filter(t => t.length > 0);
+  console.log('\n  全XX件 型総件数:');
+  info.totalCountEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
 
-    // div.brand の中身確認
-    const brandDivs = Array.from(document.querySelectorAll('div.brand'))
-      .slice(0, 5)
-      .map(el => ({
-        text: el.textContent.trim().slice(0, 40),
-        html: el.innerHTML.slice(0, 100),
-      }));
+  console.log('\n  カテゴリナビ クラス名:', info.navClasses.join(', '));
 
-    // ページ構造確認
-    const makerSectionEls = Array.from(document.querySelectorAll('[class*="maker"], [class*="brand"], [class*="Brand"]'))
-      .filter(el => el.querySelectorAll('a').length > 2)
-      .slice(0, 3)
-      .map(el => ({
-        tag: el.tagName,
-        cls: el.className.slice(0, 60),
-        linkCount: el.querySelectorAll('a').length,
-        sample: Array.from(el.querySelectorAll('a')).slice(0, 5).map(a => a.textContent.trim()).join(' | '),
-      }));
+  console.log('\n  subCate/categoryListリンク:');
+  info.catNavLinks.forEach(l => console.log(`    [${l.cls}] "${l.text}"  ...${l.href}`));
 
-    return { makerCount: makerLinks.length, makerSample: makerLinks.slice(0, 12), brandDivs, makerSectionEls };
-  });
-
-  console.log(`  ブランド数    : ${makerInfo.makerCount}`);
-  console.log(`  ブランドサンプル: ${makerInfo.makerSample.join(' / ')}`);
-  console.log(`  div.brand サンプル:`);
-  makerInfo.brandDivs.forEach(b => console.log(`    text="${b.text}"  html="${b.html}"`));
-  console.log(`  メーカーセクション:`);
-  makerInfo.makerSectionEls.forEach(e =>
-    console.log(`    <${e.tag} class="${e.cls}"> links=${e.linkCount}  sample: ${e.sample}`)
-  );
+  console.log(`\n  商品タイル数 (比較): ${info.tileCount}`);
 
   await browser.close();
 })();

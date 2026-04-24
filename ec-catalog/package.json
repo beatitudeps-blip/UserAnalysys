@@ -5,10 +5,11 @@
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js",
-    "local": "node src/main.js",
+    "local": "node src/main.js && open output",
     "local:setup": "npm install && npx playwright install chromium",
-    "local:full": "npm install && npx playwright install chromium && node src/main.js",
+    "local:full": "npm install && npx playwright install chromium && node src/main.js && open output",
     "setup": "npx playwright install chromium",
+    "open": "open output",
     "debug:yodobashi": "node src/debug-yodobashi.js",
     "debug:bic": "node src/debug-bic.js",
     "debug:edion": "node src/debug-edion.js",
