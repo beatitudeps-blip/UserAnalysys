@@ -83,12 +83,17 @@ async function fetchCategoryStats(page, category, sleep) {
         if (m) productCount = parseInt(m[1].replace(/,/g, ''), 10);
       }
 
-      // ブランド数: ul.maker li (各liが1ブランド)
-      let brandCount = null;
-      const makerLis = document.querySelectorAll('ul.maker li');
-      if (makerLis.length > 0) brandCount = makerLis.length;
+      // ブランド一覧: ul.maker li (各liが1ブランド)
+      const brands = Array.from(document.querySelectorAll('ul.maker li')).map(li => {
+        const text = li.textContent.trim();
+        const m = text.match(/^(.+?)\s*\((\d+)\)\s*$/);
+        return m
+          ? { name: m[1].trim(), productCount: parseInt(m[2], 10) }
+          : { name: text, productCount: null };
+      });
+      const brandCount = brands.length || null;
 
-      return { productCount, brandCount };
+      return { productCount, brandCount, brands };
     });
   } catch (e) {
     return null;
@@ -110,6 +115,7 @@ async function scrape(page, sleep) {
       url: cat.url,
       brandCount:   stats?.brandCount   ?? null,
       productCount: stats?.productCount ?? null,
+      brands:       stats?.brands       ?? [],
     });
     console.log(`    ブランド数: ${stats?.brandCount ?? '-'}  商品数: ${stats?.productCount ?? '-'}`);
     await sleep(1500, 2500);

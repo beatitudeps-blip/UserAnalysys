@@ -46,28 +46,25 @@ async function fetchCategoryStats(page, category, sleep) {
       await sleep(500, 800);
 
       return page.evaluate(() => {
-        let brandCount = null;
-        let productCount = null;
-
-        // ブランド名(数字) パターンを持つ .cate_list を探す
         const cateLists = Array.from(document.querySelectorAll('.cate_list'));
         for (const cl of cateLists) {
           if (!/\(\d+\)/.test(cl.textContent)) continue;
-
           const lis = cl.querySelectorAll('li');
           if (lis.length === 0) continue;
 
-          brandCount = lis.length;
+          const brands = Array.from(lis).map(li => {
+            const text = li.textContent.trim();
+            const m = text.match(/^(.+?)\s*\((\d+)\)\s*$/);
+            return m
+              ? { name: m[1].trim(), productCount: parseInt(m[2], 10) }
+              : { name: text, productCount: null };
+          });
 
-          // 各ブランドの商品数を合計 → カテゴリ総商品数
-          const nums = [...cl.textContent.matchAll(/\((\d+)\)/g)]
-            .map(m => parseInt(m[1], 10));
-          if (nums.length > 0) productCount = nums.reduce((s, n) => s + n, 0);
-
-          break;
+          const brandCount = brands.length;
+          const productCount = brands.reduce((s, b) => s + (b.productCount ?? 0), 0) || null;
+          return { brandCount, productCount, brands };
         }
-
-        return { brandCount, productCount };
+        return { brandCount: null, productCount: null, brands: [] };
       });
     } catch (e) {
       if (attempt === 0) await sleep(3000, 5000);
@@ -91,6 +88,7 @@ async function scrape(page, sleep) {
       url: cat.url,
       brandCount:   stats?.brandCount   ?? null,
       productCount: stats?.productCount ?? null,
+      brands:       stats?.brands       ?? [],
     });
     console.log(`    ブランド数: ${stats?.brandCount ?? '-'}  商品数: ${stats?.productCount ?? '-'}`);
     await sleep(2000, 3500);
