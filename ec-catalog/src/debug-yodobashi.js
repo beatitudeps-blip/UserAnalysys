@@ -96,5 +96,48 @@ const KADEN_WORD_URL = 'https://www.yodobashi.com/category/6353/?word=';
   wordInfo.countCandidates.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
   console.log('  本文中の件数パターン:', wordInfo.countMatches.join(' / ') || '(なし)');
 
+  // ── 3. /maker/ ページ: ブランド数上限の原因調査 ──
+  const MAKER_URL = 'https://www.yodobashi.com/category/6353/maker/';
+  console.log(`\n====== [3] /maker/ ページ: ${MAKER_URL} ======`);
+  await page.goto(MAKER_URL, { waitUntil: 'load', timeout: 30000 });
+  await page.waitForTimeout(3000);
+
+  const makerInfo = await page.evaluate(() => {
+    // ブランドリンク数
+    const makerLinks = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+      .filter(a => /\/m\d/.test(a.href));
+
+    // 「件」含む要素（総ブランド数）
+    const countEls = Array.from(document.querySelectorAll('*'))
+      .filter(el => {
+        const t = el.textContent.trim();
+        return t.length < 80 && /[\d,]+(件|ブランド|メーカー)/.test(t);
+      })
+      .slice(0, 8)
+      .map(el => ({ tag: el.tagName, cls: el.className.slice(0, 60), text: el.textContent.trim().slice(0, 60) }));
+
+    // ページネーション（総ページ数）
+    const pagerEls = Array.from(document.querySelectorAll('[class*="pager"], [class*="page"], [class*="navi"]'))
+      .filter(el => /\d/.test(el.textContent)).slice(0, 3)
+      .map(el => ({ cls: el.className.slice(0, 60), text: el.textContent.replace(/\s+/g, ' ').trim().slice(0, 100) }));
+
+    // h2.numOfSearch（商品数ページと同じ総件数要素があるか）
+    const numOfSearch = document.querySelector('h2.numOfSearch, .searchResultsHead');
+    const numText = numOfSearch?.textContent.trim() || '(なし)';
+
+    // サンプルブランド名
+    const sample = makerLinks.slice(0, 8).map(a => a.textContent.trim().slice(0, 20));
+
+    return { makerLinkCount: makerLinks.length, countEls, pagerEls, numText, sample };
+  });
+
+  console.log(`  /m数字 リンク数: ${makerInfo.makerLinkCount}`);
+  console.log(`  h2.numOfSearch: ${makerInfo.numText}`);
+  console.log('  件数含む要素:');
+  makerInfo.countEls.forEach(e => console.log(`    <${e.tag} class="${e.cls}"> "${e.text}"`));
+  console.log('  ページネーション:');
+  makerInfo.pagerEls.forEach(e => console.log(`    [${e.cls}] "${e.text}"`));
+  console.log('  ブランドサンプル:', makerInfo.sample.join(' / '));
+
   await browser.close();
 })();
