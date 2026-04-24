@@ -49,15 +49,21 @@ function resolveScrapers() {
 
   const browser = await chromium.launch({
     headless: false,
-    args: ['--disable-blink-features=AutomationControlled'],
+    ignoreDefaultArgs: ['--enable-automation'],
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
   });
   const context = await browser.newContext({
     userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
       '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     viewport: { width: 1280, height: 900 },
     locale: 'ja-JP',
+    timezoneId: 'Asia/Tokyo',
     ignoreHTTPSErrors: true,
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    window.chrome = { runtime: {} };
   });
   const page = await context.newPage();
 

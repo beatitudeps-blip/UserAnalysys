@@ -31,18 +31,40 @@ async function fetchCategoryStats(page, category, sleep) {
     const listUrl = category.url.replace(/\/?$/, '/') + '?word=';
     const res = await page.goto(listUrl, { waitUntil: 'load', timeout: 30000 });
     if (!res || res.status() !== 200) return null;
-    await sleep(1500, 2000);
+    await sleep(2500, 3500); // AJAX描画待ち（itemCountはAJAX遅延）
 
-    // スクロールで遅延描画を促す
+    // スクロールで遅延読み込みを促し、先頭に戻る
     await page.evaluate(() => window.scrollTo(0, 600));
+    await sleep(1500, 2000);
+    await page.evaluate(() => window.scrollTo(0, 0));
     await sleep(800, 1200);
 
     const productCount = await page.evaluate(() => {
-      // 確認済み: .srcResultItem または [class*="productList"] li
-      const items = document.querySelectorAll('.srcResultItem');
-      if (items.length > 0) return items.length;
-      const listItems = document.querySelectorAll('[class*="productList"] li');
-      return listItems.length || null;
+      // itemCount（AJAX後に件数が入る）
+      const itemCountEl = document.querySelector('.itemCount');
+      if (itemCountEl) {
+        const m = itemCountEl.textContent.match(/[\d,]+/);
+        if (m) {
+          const n = parseInt(m[0].replace(/,/g, ''), 10);
+          if (n > 0) return n;
+        }
+      }
+
+      // 商品タイルを直接カウント（debug v5 の確認済みセレクタ一覧）
+      for (const sel of [
+        '.js_productListTile',
+        '.p-list_item',
+        '.productItemTile',
+        '.srcResultItem',
+        '[class*="productList"] li',
+        '[class*="ProductList"] li',
+        '[class*="itemList"] li',
+        '[class*="listItem"]',
+      ]) {
+        const items = document.querySelectorAll(sel);
+        if (items.length > 0) return items.length;
+      }
+      return null;
     });
 
     // ── ブランド数: /maker/ ページ ──
