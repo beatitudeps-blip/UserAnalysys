@@ -55,7 +55,17 @@ async function fetchCategoryStats(page, category, sleep) {
     const brandCount = await page.evaluate(() => {
       const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
         .filter(a => /\/m\d/.test(a.href));
-      return links.length || null;
+      const perPage = links.length;
+      if (!perPage) return null;
+
+      // ページネーション "N / 23" を探して総ページ数を取得
+      const bodyText = document.body?.innerText || '';
+      const m = bodyText.match(/\d+\s*\/\s*(\d+)/);
+      if (m) {
+        const totalPages = parseInt(m[1], 10);
+        return totalPages * perPage;
+      }
+      return perPage;
     });
 
     return { productCount, brandCount };
