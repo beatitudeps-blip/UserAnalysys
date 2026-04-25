@@ -26,9 +26,9 @@ async function fetchCategories(page, sleep) {
 
 // /maker/ を ?pno=N で全ページ巡回してブランド名一覧を返す
 async function fetchAllBrands(page, makerUrl, sleep) {
-  const res = await page.goto(makerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const res = await page.goto(makerUrl, { waitUntil: 'load', timeout: 30000 });
   if (!res || res.status() !== 200) return [];
-  await sleep(800, 1200);
+  await sleep(3000, 4000); // AJAXでページネーションが描画されるまで待つ
 
   const { items: page1, totalPages } = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
