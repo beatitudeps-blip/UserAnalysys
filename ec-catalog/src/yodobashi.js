@@ -24,36 +24,36 @@ async function fetchCategories(page, sleep) {
   });
 }
 
-// /maker/ を全ページ巡回してブランド名一覧を返す
-async function fetchAllBrands(page, makerUrl, sleep, catName) {
-  const brands = [];
-  let currentUrl = makerUrl;
-  let pageNum = 0;
+// /maker/ を ?pno=N で全ページ巡回してブランド名一覧を返す
+async function fetchAllBrands(page, makerUrl, sleep) {
+  const res = await page.goto(makerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  if (!res || res.status() !== 200) return [];
+  await sleep(800, 1200);
 
-  while (currentUrl) {
-    pageNum++;
-    const res = await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    if (!res || res.status() !== 200) break;
-    await sleep(800, 1200);
+  const { items: page1, totalPages } = await page.evaluate(() => {
+    const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+      .filter(a => /\/m\d/.test(a.href));
+    const items = links.map(a => ({ name: a.textContent.trim().replace(/\s+/g, ' '), productCount: null }));
+    const pm = (document.body?.innerText || '').match(/\d+\s*\/\s*(\d+)/);
+    return { items, totalPages: pm ? parseInt(pm[1], 10) : 1 };
+  });
 
-    const { items, nextHref, totalPages } = await page.evaluate(() => {
-      const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-        .filter(a => /\/m\d/.test(a.href));
-      const items = links.map(a => ({
-        name: a.textContent.trim().replace(/\s+/g, ' '),
-        productCount: null,
-      }));
-      const nextEl = Array.from(document.querySelectorAll('a')).find(a => /次の\d+件/.test(a.textContent));
-      const bodyText = document.body?.innerText || '';
-      const pm = bodyText.match(/\d+\s*\/\s*(\d+)/);
-      return { items, nextHref: nextEl?.href ?? null, totalPages: pm ? parseInt(pm[1], 10) : 1 };
-    });
-
-    brands.push(...items);
-    if (pageNum === 1) console.log(`    ブランドページ巡回中 (全${totalPages}ページ)...`);
-    currentUrl = nextHref;
+  const brands = [...page1];
+  if (totalPages > 1) {
+    console.log(`    ブランドページ巡回中 (全${totalPages}ページ)...`);
+    for (let pno = 2; pno <= totalPages; pno++) {
+      const pr = await page.goto(`${makerUrl}?pno=${pno}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      if (!pr || pr.status() !== 200) break;
+      await sleep(800, 1200);
+      const items = await page.evaluate(() => {
+        const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+          .filter(a => /\/m\d/.test(a.href));
+        return links.map(a => ({ name: a.textContent.trim().replace(/\s+/g, ' '), productCount: null }));
+      });
+      if (items.length === 0) break;
+      brands.push(...items);
+    }
   }
-
   return brands;
 }
 
@@ -77,12 +77,7 @@ async function fetchCategoryStats(page, category, sleep) {
 
     // ── ブランド一覧: /maker/ を全ページ巡回 ──
     const makerUrl = category.url.replace(/\/?$/, '/') + 'maker/';
-    const makerRes = await page.goto(makerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    if (!makerRes || makerRes.status() !== 200) {
-      return { productCount, brandCount: null, brands: [] };
-    }
-
-    const brands = await fetchAllBrands(page, makerUrl, sleep, category.name);
+    const brands = await fetchAllBrands(page, makerUrl, sleep);
     return { productCount, brandCount: brands.length || null, brands };
   } catch (e) {
     return null;
