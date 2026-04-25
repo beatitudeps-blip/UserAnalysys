@@ -24,43 +24,29 @@ async function fetchCategories(page, sleep) {
   });
 }
 
-// /maker/ を ?pno=N で全ページ巡回してブランド名一覧を返す
+// /maker/p{N}/ を順に巡回してブランド名一覧を返す
 async function fetchAllBrands(page, makerUrl, sleep) {
-  const res = await page.goto(makerUrl, { waitUntil: 'load', timeout: 30000 });
-  if (!res || res.status() !== 200) return [];
+  const brands = [];
 
-  // ページネーション (.inlineRow) またはブランドリンクが出るまで最大10秒待つ
-  try { await page.waitForSelector('.inlineRow, a[href*="/m"]', { timeout: 10000 }); } catch {}
+  for (let pno = 1; ; pno++) {
+    const url = pno === 1 ? makerUrl : `${makerUrl}p${pno}/`;
+    const res = await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    if (!res || res.status() !== 200) break;
+    await sleep(800, 1200);
 
-  const { items: page1, totalPages } = await page.evaluate(() => {
-    const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-      .filter(a => /\/m\d/.test(a.href));
-    const items = links.map(a => ({ name: a.textContent.trim().replace(/\s+/g, ' '), productCount: null }));
-    // .inlineRow の中の "N / M" を優先して探す
-    const pagerText = document.querySelector('.inlineRow')?.innerText
-      || document.body?.innerText || '';
-    const pm = pagerText.match(/(\d+)\s*\/\s*(\d+)/);
-    return { items, totalPages: pm ? parseInt(pm[2], 10) : 1 };
-  });
+    const items = await page.evaluate(() => {
+      const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
+        .filter(a => /\/m\d/.test(a.href));
+      return links.map(a => ({ name: a.textContent.trim().replace(/\s+/g, ' '), productCount: null }));
+    });
 
-  console.log(`    [debug] page1=${page1.length}件 totalPages=${totalPages}`);
-
-  const brands = [...page1];
-  if (totalPages > 1) {
-    console.log(`    ブランドページ巡回中 (全${totalPages}ページ)...`);
-    for (let pno = 2; pno <= totalPages; pno++) {
-      const pr = await page.goto(`${makerUrl}?pno=${pno}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      if (!pr || pr.status() !== 200) break;
-      await sleep(800, 1200);
-      const items = await page.evaluate(() => {
-        const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
-          .filter(a => /\/m\d/.test(a.href));
-        return links.map(a => ({ name: a.textContent.trim().replace(/\s+/g, ' '), productCount: null }));
-      });
-      if (items.length === 0) break;
-      brands.push(...items);
-    }
+    if (items.length === 0) break;
+    brands.push(...items);
+    if (pno === 1) process.stdout.write('    ブランドページ巡回中...');
+    else process.stdout.write(` p${pno}`);
   }
+
+  if (brands.length > 0) console.log(` 計${brands.length}件`);
   return brands;
 }
 
