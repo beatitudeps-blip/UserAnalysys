@@ -28,15 +28,22 @@ async function fetchCategories(page, sleep) {
 async function fetchAllBrands(page, makerUrl, sleep) {
   const res = await page.goto(makerUrl, { waitUntil: 'load', timeout: 30000 });
   if (!res || res.status() !== 200) return [];
-  await sleep(3000, 4000); // AJAXでページネーションが描画されるまで待つ
+
+  // ページネーション (.inlineRow) またはブランドリンクが出るまで最大10秒待つ
+  try { await page.waitForSelector('.inlineRow, a[href*="/m"]', { timeout: 10000 }); } catch {}
 
   const { items: page1, totalPages } = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll('a[href*="/category/"]'))
       .filter(a => /\/m\d/.test(a.href));
     const items = links.map(a => ({ name: a.textContent.trim().replace(/\s+/g, ' '), productCount: null }));
-    const pm = (document.body?.innerText || '').match(/\d+\s*\/\s*(\d+)/);
-    return { items, totalPages: pm ? parseInt(pm[1], 10) : 1 };
+    // .inlineRow の中の "N / M" を優先して探す
+    const pagerText = document.querySelector('.inlineRow')?.innerText
+      || document.body?.innerText || '';
+    const pm = pagerText.match(/(\d+)\s*\/\s*(\d+)/);
+    return { items, totalPages: pm ? parseInt(pm[2], 10) : 1 };
   });
+
+  console.log(`    [debug] page1=${page1.length}件 totalPages=${totalPages}`);
 
   const brands = [...page1];
   if (totalPages > 1) {
